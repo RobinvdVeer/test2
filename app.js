@@ -8,10 +8,11 @@ const start = [
   '........', '........', 'PPPPPPPP', 'RNBQKBNR'
 ];
 
-let board, turn, selected, legalForSelected, enPassant, castling, gameOver;
+let board, turn, selected, legalForSelected, enPassant, castling, gameOver, kingPos;
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
 const chaosEl = document.getElementById('chaos');
+const squareEls = [];
 
 function newGame() {
   board = start.map(row => row.split(''));
@@ -20,6 +21,7 @@ function newGame() {
   legalForSelected = [];
   enPassant = null;
   castling = { K: true, Q: true, k: true, q: true };
+  kingPos = { w: { r: 7, c: 4 }, b: { r: 0, c: 4 } };
   gameOver = false;
   setStatus('White to move. The bot is already sweating pixels.');
   render();
@@ -31,16 +33,31 @@ function colorOf(p) {
 }
 function enemy(c) { return c === 'w' ? 'b' : 'w'; }
 function inBounds(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
-function clone(b = board) { return b.map(row => row.slice()); }
 function same(a, b) { return a && b && a.r === b.r && a.c === b.c; }
 
+function initBoardDom() {
+  const fragment = document.createDocumentFragment();
+  for (let r = 0; r < 8; r++) {
+    squareEls[r] = [];
+    for (let c = 0; c < 8; c++) {
+      const sq = document.createElement('button');
+      sq.dataset.r = r; sq.dataset.c = c;
+      squareEls[r][c] = sq;
+      fragment.appendChild(sq);
+    }
+  }
+  boardEl.appendChild(fragment);
+}
+
 function render() {
-  boardEl.innerHTML = '';
   const legalKeys = new Set(legalForSelected.map(m => `${m.to.r},${m.to.c}`));
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
-      const sq = document.createElement('button');
+      const sq = squareEls[r][c];
       sq.className = `square ${(r + c) % 2 ? 'dark' : 'light'}`;
+      sq.style.removeProperty('--x');
+      sq.style.removeProperty('--y');
+      sq.style.removeProperty('--r');
       if (selected && selected.r === r && selected.c === c) sq.classList.add('selected');
       if (legalKeys.has(`${r},${c}`)) sq.classList.add('legal');
       if (chaosEl.checked && Math.random() < 0.08) {
@@ -49,19 +66,19 @@ function render() {
         sq.style.setProperty('--y', `${Math.floor(Math.random() * 13) - 6}px`);
         sq.style.setProperty('--r', `${Math.floor(Math.random() * 9) - 4}deg`);
       }
-      sq.dataset.r = r; sq.dataset.c = c;
       const p = board[r][c];
-      sq.innerHTML = p === '.' ? '' : `<span class="piece ${colorOf(p) === 'w' ? 'white' : 'black'}">${PIECES[p]}</span>`;
-      sq.addEventListener('click', onSquareClick);
-      boardEl.appendChild(sq);
+      if (sq.dataset.piece !== p) {
+        sq.dataset.piece = p;
+        sq.innerHTML = p === '.' ? '' : `<span class="piece ${colorOf(p) === 'w' ? 'white' : 'black'}">${PIECES[p]}</span>`;
+      }
     }
   }
 }
 
-function onSquareClick(e) {
+function onSquareClick(sq) {
   if (gameOver || turn !== 'w') return;
-  const r = +e.currentTarget.dataset.r;
-  const c = +e.currentTarget.dataset.c;
+  const r = +sq.dataset.r;
+  const c = +sq.dataset.c;
   const p = board[r][c];
 
   if (selected) {
@@ -118,11 +135,23 @@ function allLegalMoves(color) {
 
 function legalMovesFor(r, c) {
   const color = colorOf(board[r][c]);
-  return pseudoMovesFor(r, c).filter(m => {
-    const next = clone();
-    applyMoveTo(next, m);
-    return !isInCheck(next, color);
-  });
+  return pseudoMovesFor(r, c).filter(m => isLegalMove(m, color));
+}
+
+function isLegalMove(m, color) {
+  const undo = applyMoveInPlace(board, m);
+  const legal = !isInCheck(board, color);
+  undoMove(board, undo);
+  return legal;
+}
+
+function hasAnyLegalMove(color) {
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    if (colorOf(board[r][c]) !== color) continue;
+    const moves = pseudoMovesFor(r, c);
+    for (const move of moves) if (isLegalMove(move, color)) return true;
+  }
+  return false;
 }
 
 function pseudoMovesFor(r, c) {
@@ -187,12 +216,45 @@ function makeMove(m) {
 }
 
 function applyMoveTo(b, m) {
+  applyMoveInPlace(b, m);
+}
+
+function applyMoveInPlace(b, m) {
   const p = b[m.from.r][m.from.c];
+  const capturedAt = m.enPassant ? { r: m.from.r, c: m.to.c } : { r: m.to.r, c: m.to.c };
+  const undo = {
+    move: m,
+    piece: p,
+    captured: b[capturedAt.r][capturedAt.c],
+    capturedAt,
+    rook: null,
+    previousKing: b === board && p.toLowerCase() === 'k' ? { ...kingPos[colorOf(p)] } : null
+  };
   b[m.from.r][m.from.c] = '.';
   if (m.enPassant) b[m.from.r][m.to.c] = '.';
   b[m.to.r][m.to.c] = m.promotion || p;
-  if (m.castle === 'k') { b[m.to.r][5] = b[m.to.r][7]; b[m.to.r][7] = '.'; }
-  if (m.castle === 'q') { b[m.to.r][3] = b[m.to.r][0]; b[m.to.r][0] = '.'; }
+  if (b === board && p.toLowerCase() === 'k') kingPos[colorOf(p)] = { r: m.to.r, c: m.to.c };
+  if (m.castle === 'k') {
+    undo.rook = { from: { r: m.to.r, c: 7 }, to: { r: m.to.r, c: 5 }, piece: b[m.to.r][7] };
+    b[m.to.r][5] = b[m.to.r][7]; b[m.to.r][7] = '.';
+  }
+  if (m.castle === 'q') {
+    undo.rook = { from: { r: m.to.r, c: 0 }, to: { r: m.to.r, c: 3 }, piece: b[m.to.r][0] };
+    b[m.to.r][3] = b[m.to.r][0]; b[m.to.r][0] = '.';
+  }
+  return undo;
+}
+
+function undoMove(b, undo) {
+  const m = undo.move;
+  b[m.from.r][m.from.c] = undo.piece;
+  b[m.to.r][m.to.c] = '.';
+  b[undo.capturedAt.r][undo.capturedAt.c] = undo.captured;
+  if (undo.rook) {
+    b[undo.rook.from.r][undo.rook.from.c] = undo.rook.piece;
+    b[undo.rook.to.r][undo.rook.to.c] = '.';
+  }
+  if (undo.previousKing) kingPos[colorOf(undo.piece)] = undo.previousKing;
 }
 
 function updateCastlingRights(m, p) {
@@ -210,8 +272,10 @@ function updateCastlingRights(m, p) {
 
 function inCheck(color) { return isInCheck(board, color); }
 function isInCheck(b, color) {
-  let king = null;
-  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) if (b[r][c] === (color === 'w' ? 'K' : 'k')) king = { r, c };
+  let king = b === board ? kingPos[color] : null;
+  if (!king) {
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) if (b[r][c] === (color === 'w' ? 'K' : 'k')) king = { r, c };
+  }
   return king ? squareAttacked(b, king.r, king.c, enemy(color)) : true;
 }
 
@@ -238,13 +302,16 @@ function attacksSquare(b, r, c, tr, tc) {
 }
 
 function checkGameEnd() {
-  const moves = allLegalMoves(turn);
-  if (moves.length) return false;
+  if (hasAnyLegalMove(turn)) return false;
   gameOver = true;
   setStatus(inCheck(turn) ? `${turn === 'w' ? 'White' : 'Black'} is checkmated. Incredible and upsetting.` : 'Stalemate. Nobody wins, especially chess.');
   return true;
 }
 
+boardEl.addEventListener('click', e => {
+  const sq = e.target.closest('.square');
+  if (sq && boardEl.contains(sq)) onSquareClick(sq);
+});
 document.getElementById('newGame').addEventListener('click', newGame);
 document.getElementById('noiseBtn').addEventListener('click', () => {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -255,4 +322,5 @@ document.getElementById('noiseBtn').addEventListener('click', () => {
   osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + 0.15);
 });
 chaosEl.addEventListener('change', render);
+initBoardDom();
 newGame();
