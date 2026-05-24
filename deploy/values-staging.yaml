@@ -1,0 +1,10 @@
+replicaCount: 1
+
+image:
+  app:
+    repository: ghcr.io/pi/really-bad-chess-web-app
+    tag: latest
+    pullPolicy: IfNotPresent
+
+ingress:
+  enabled: false
