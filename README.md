@@ -4,15 +4,29 @@ A deliberately awful 90s-Geocities-inspired chess web app. You play White agains
 
 ## Run
 
-Open `index.html` in a browser. No backend, build step, dependencies, or dignity required.
+Serve the app over HTTP with Docker Compose:
+
+```sh
+docker compose up
+```
+
+Then open <http://localhost:8080> in a browser.
+
+Docker Compose binds the demo server to localhost only and serves only the static files in `public/`. For production deployment, use a purpose-built web server or reverse proxy with appropriate access controls and TLS.
+
+Do not open `public/index.html` directly with a `file://` URL. The app uses ES modules, and modern browsers block module imports from `file://` origins.
 
 ## Check
 
 Run `npm run check` to syntax-check the JavaScript modules.
 
+## Test
+
+Run `npm test` to execute the Node.js test suite.
+
 ## How to play
 
-1. Open `index.html`.
+1. Start the app with `docker compose up` and open <http://localhost:8080>.
 2. Click one of your White pieces to select it.
 3. Click a highlighted destination square to move there.
 4. Wait briefly while the Black bot thinks very incorrectly and makes a move.
@@ -28,11 +42,23 @@ Run `npm run check` to syntax-check the JavaScript modules.
 
 - The human player is always White, and the bot is always Black.
 - Pawn promotion always becomes a queen; there is no promotion picker.
-- There is no save, move history, undo, multiplayer, backend, or API beyond `window.BadChess.newGame()`.
+- There is no save, move history, undo, multiplayer, backend, or public API beyond `window.BadChess.newGame()`.
+- `window.__badChess` is an internal, unsupported test hook and should not be used by application code.
 
 ## Configuration
 
-Maintainers can tune the badness in `app.js` using the named constants near the top of the file:
+Maintainers can tune the badness in `public/app.js` using the named constants near the top of the file:
 
-- `GLITCH_PROBABILITY`, `GLITCH_MAX_OFFSET_PX`, and `GLITCH_MAX_ROTATION_DEG` control random layout glitches.
-- `BOT_PAWN_MOVE_BIAS`, `BOT_MIN_DELAY_MS`, and `BOT_MAX_DELAY_MS` control the bot's pawn preference and thinking delay.
+- `GLITCH_PROBABILITY` controls how often a square receives a visual glitch. Use a probability from `0` to `1`.
+- `GLITCH_MAX_OFFSET_PX` controls the maximum horizontal/vertical glitch offset in pixels.
+- `GLITCH_MAX_ROTATION_DEG` controls the maximum glitch rotation in degrees.
+- `BOT_PAWN_MOVE_BIAS` controls how often the bot prefers pawn moves when available. Use a probability from `0` to `1`.
+- `BOT_MIN_DELAY_MS` and `BOT_MAX_DELAY_MS` control the bot's thinking delay in milliseconds.
+
+Example: set `BOT_PAWN_MOVE_BIAS = 0.25` for fewer pawn moves, or `GLITCH_PROBABILITY = 0` to disable layout glitches by default.
+
+The reusable bot helper in `bot.js` accepts the same pawn-bias setting:
+
+```js
+makeBadBotMove(state, { pawnMoveBias: 0.25 });
+```
