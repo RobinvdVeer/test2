@@ -28,7 +28,6 @@ export function enemy(c) { return c === 'w' ? 'b' : 'w'; }
 export function inCheck(state, color) { return isInCheck(state.board, color); }
 
 function inBounds(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
-function cloneBoard(board) { return board.map(row => row.slice()); }
 function pieceAt(state, r, c) { return state.board[r][c]; }
 
 export function allLegalMoves(state, color) {
@@ -42,9 +41,10 @@ export function allLegalMoves(state, color) {
 export function legalMovesFor(state, r, c) {
   const color = colorOf(pieceAt(state, r, c));
   return pseudoMovesFor(state, r, c).filter(m => {
-    const nextBoard = cloneBoard(state.board);
-    applyMoveTo(nextBoard, m);
-    return !isInCheck(nextBoard, color);
+    const undo = applyMoveTo(state.board, m);
+    const legal = !isInCheck(state.board, color);
+    undoMove(state.board, undo);
+    return legal;
   });
 }
 
@@ -147,11 +147,35 @@ export function makeMove(state, move) {
 
 function applyMoveTo(board, move) {
   const p = board[move.from.r][move.from.c];
+  const undo = {
+    move,
+    fromPiece: p,
+    toPiece: board[move.to.r][move.to.c],
+    enPassantPiece: move.enPassant ? board[move.from.r][move.to.c] : null,
+    castleRook: move.castle ? {
+      fromC: move.castle === 'k' ? 7 : 0,
+      toC: move.castle === 'k' ? 5 : 3,
+      fromPiece: board[move.to.r][move.castle === 'k' ? 7 : 0],
+      toPiece: board[move.to.r][move.castle === 'k' ? 5 : 3]
+    } : null
+  };
   board[move.from.r][move.from.c] = '.';
   if (move.enPassant) board[move.from.r][move.to.c] = '.';
   board[move.to.r][move.to.c] = move.promotion || p;
   if (move.castle === 'k') { board[move.to.r][5] = board[move.to.r][7]; board[move.to.r][7] = '.'; }
   if (move.castle === 'q') { board[move.to.r][3] = board[move.to.r][0]; board[move.to.r][0] = '.'; }
+  return undo;
+}
+
+function undoMove(board, undo) {
+  const { move } = undo;
+  if (undo.castleRook) {
+    board[move.to.r][undo.castleRook.fromC] = undo.castleRook.fromPiece;
+    board[move.to.r][undo.castleRook.toC] = undo.castleRook.toPiece;
+  }
+  board[move.from.r][move.from.c] = undo.fromPiece;
+  board[move.to.r][move.to.c] = undo.toPiece;
+  if (move.enPassant) board[move.from.r][move.to.c] = undo.enPassantPiece;
 }
 
 function updateCastlingRights(castling, move, p) {
@@ -204,7 +228,7 @@ function attacksSquare(board, r, c, tr, tc) {
 
 export function getGameEnd(state) {
   const moves = allLegalMoves(state, state.turn);
-  if (moves.length) return { over: false };
+  if (moves.length) return { over: false, moves };
   return { over: true, checkmate: inCheck(state, state.turn), color: state.turn };
 }
 
@@ -213,3 +237,5 @@ export function markGameOverIfNeeded(state) {
   if (result.over) state.gameOver = true;
   return result;
 }
+
+export const checkGameEnd = markGameOverIfNeeded;
