@@ -1,5 +1,6 @@
-import { PIECES, allLegalMoves as engineAllLegalMoves, checkGameEnd, colorOf, createGameState, inCheck, legalMovesFor as engineLegalMovesFor, makeMove as engineMakeMove } from './chess-engine.js';
+import { PIECES, allLegalMoves as engineAllLegalMoves, checkGameEnd, colorOf, createGameState, inCheck, legalMovesFor as engineLegalMovesFor, makeMove as engineMakeMove, pseudoMovesFor as enginePseudoMovesFor } from './chess-engine.js';
 import { playBadNoise } from './audio.js';
+import { makeBadBotMove } from './bot.js';
 
 // Configuration knobs for maintainers who want to tune the badness without spelunking.
 const GLITCH_PROBABILITY = 0.08;
@@ -113,12 +114,7 @@ function afterPlayerMove() {
 
 function botMove() {
   if (game.gameOver) return;
-  const moves = engineAllLegalMoves(game, 'b');
-  if (!moves.length) return showGameEndIfNeeded();
-  // Bad bot: heavily prefers random pawn moves, otherwise random chaos.
-  const pawnMoves = moves.filter(m => game.board[m.from.r][m.from.c].toLowerCase() === 'p');
-  const pool = pawnMoves.length && Math.random() < BOT_PAWN_MOVE_BIAS ? pawnMoves : moves;
-  engineMakeMove(game, pool[Math.floor(Math.random() * pool.length)]);
+  if (!makeBadBotMove(game, { pawnMoveBias: BOT_PAWN_MOVE_BIAS })) return showGameEndIfNeeded();
   game.turn = 'w';
   render();
   if (!showGameEndIfNeeded()) setStatus(inCheck(game, 'w') ? 'CHECK! The bot did that by accident.' : 'Your move. The bot regrets nothing.');
@@ -147,6 +143,7 @@ if (typeof window !== 'undefined') {
     botMove,
     allLegalMoves(color) { return engineAllLegalMoves(game, color); },
     legalMovesFor(r, c) { return engineLegalMovesFor(game, r, c); },
+    pseudoMovesFor(r, c) { return enginePseudoMovesFor(game, r, c); },
     makeMove(move) { return engineMakeMove(game, move); },
     checkGameEnd: showGameEndIfNeeded,
     inCheck(color) { return inCheck(game, color); },
