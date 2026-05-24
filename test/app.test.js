@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +19,7 @@ import {
 import { chooseBadBotMove, makeBadBotMove } from '../public/bot.js';
 import { playBadNoise } from '../public/audio.js';
 import { createDomBoardView } from '../public/board-view.js';
+import { createGameControllerSession } from '../public/game-controller.js';
 
 let importCounter = 0;
 
@@ -92,7 +93,7 @@ function createAudioContextRecorder() {
   return { AudioContext, calls, oscillators, gains };
 }
 
-async function loadApp({ random = () => 0.99, audioContext, modulePath = '../public/app.js' } = {}) {
+async function loadApp({ random = () => 0.99, audioContext, modulePath = '../public/app.js', enableTestHooks = true } = {}) {
   const ids = {
     board: new ElementStub('div', 'board'),
     status: new ElementStub('div', 'status'),
@@ -114,13 +115,17 @@ async function loadApp({ random = () => 0.99, audioContext, modulePath = '../pub
   const originalAudioContext = globalThis.AudioContext;
   const originalWebkitAudioContext = globalThis.webkitAudioContext;
   const originalTestHooksFlag = globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
+  const originalBadChess = globalThis.BadChess;
+  const originalDebugApi = globalThis.__badChess;
   const recorder = audioContext || createAudioContextRecorder();
 
   globalThis.document = document;
   globalThis.window = globalThis;
   globalThis.AudioContext = recorder.AudioContext;
   globalThis.webkitAudioContext = recorder.AudioContext;
-  globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = true;
+  globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = enableTestHooks;
+  delete globalThis.BadChess;
+  delete globalThis.__badChess;
   Math.random = random;
   globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
   globalThis.clearTimeout = () => {};
@@ -137,6 +142,10 @@ async function loadApp({ random = () => 0.99, audioContext, modulePath = '../pub
     else globalThis.webkitAudioContext = originalWebkitAudioContext;
     if (originalTestHooksFlag === undefined) delete globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
     else globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = originalTestHooksFlag;
+    if (originalBadChess === undefined) delete globalThis.BadChess;
+    else globalThis.BadChess = originalBadChess;
+    if (originalDebugApi === undefined) delete globalThis.__badChess;
+    else globalThis.__badChess = originalDebugApi;
   };
 
   try {
@@ -146,7 +155,7 @@ async function loadApp({ random = () => 0.99, audioContext, modulePath = '../pub
     throw err;
   }
 
-  return { api: globalThis.__badChess, ids, timers, audio: recorder, restore };
+  return { api: globalThis.__badChess, badChess: globalThis.BadChess, ids, timers, audio: recorder, restore };
 }
 
 function stateFrom(boardOrNext, turn = 'w', castling = { K: false, Q: false, k: false, q: false }, enPassant = null) {
@@ -167,14 +176,29 @@ function stateFrom(boardOrNext, turn = 'w', castling = { K: false, Q: false, k: 
 const destinations = moves => moves.map(m => `${m.to.r},${m.to.c}`).sort();
 const hasMove = (moves, r, c, prop) => moves.some(m => m.to.r === r && m.to.c === c && (!prop || m[prop]));
 const boardKey = state => state.board.map(r => r.join('')).join('/');
+const stateSnapshot = state => ({ board: boardKey(state), castling: { ...state.castling }, enPassant: state.enPassant ? { ...state.enPassant } : null });
 const applyMoveForTest = (state, move) => { makeMove(state, move); return state; };
 const squareAt = (ids, r, c) => ids.board.children.find(sq => Number(sq.dataset.r) === r && Number(sq.dataset.c) === c);
+const yamlValue = (path, regex) => readFileSync(path, 'utf8').match(regex)?.[1];
+const chartRepository = () => yamlValue('deploy/chart/values.yaml', /\n\s+repository:\s*(\S+)/);
+const composeImage = () => yamlValue('docker-compose.yml', /\n\s+image:\s*(\S+)/);
 
 test('app module imports successfully with DOM stubs', async () => {
   const app = await loadApp();
   try {
     assert.equal(app.ids.board.children.length, 64);
     assert.equal(typeof app.api.newGame, 'function');
+  } finally {
+    app.restore();
+  }
+});
+
+test('app production branch initializes without exposing debug hooks', async () => {
+  const app = await loadApp({ enableTestHooks: false });
+  try {
+    assert.equal(app.ids.board.children.length, 64);
+    assert.equal(typeof app.badChess.newGame, 'function');
+    assert.equal(globalThis.__badChess, undefined);
   } finally {
     app.restore();
   }
@@ -277,6 +301,52 @@ test('special rules: promotion, en passant, castling, castling restrictions, and
   assert.equal(state.castling.k, false, 'capturing rook revokes opponent castling right');
 });
 
+test('legal move generation leaves special-move positions unchanged', () => {
+  const cases = [
+    {
+      name: 'castling',
+      state: stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: true, q: true }),
+      run: state => legalMovesFor(state, 7, 4)
+    },
+    {
+      name: 'en passant',
+      state: stateFrom(['....k...', '........', '........', '...Pp...', '........', '........', '........', '....K...'], 'w', undefined, { r: 2, c: 4 }),
+      run: state => legalMovesFor(state, 3, 3)
+    },
+    {
+      name: 'promotion',
+      state: stateFrom(['....k...', 'P.......', '........', '........', '........', '........', '........', '....K...']),
+      run: state => allLegalMoves(state, 'w')
+    }
+  ];
+
+  for (const { name, state, run } of cases) {
+    const before = stateSnapshot(state);
+    assert.ok(run(state).length > 0, `${name} position has legal moves`);
+    assert.deepEqual(stateSnapshot(state), before, `${name} move generation is pure`);
+  }
+});
+
+test('castling execution moves the king and rook for both colors and both sides', () => {
+  for (const { name, color, side, kingFrom, kingTo, rookFrom, rookTo, kingPiece, rookPiece, rights } of [
+    { name: 'white king-side', color: 'w', side: 'k', kingFrom: [7, 4], kingTo: [7, 6], rookFrom: [7, 7], rookTo: [7, 5], kingPiece: 'K', rookPiece: 'R', rights: ['K', 'Q'] },
+    { name: 'white queen-side', color: 'w', side: 'q', kingFrom: [7, 4], kingTo: [7, 2], rookFrom: [7, 0], rookTo: [7, 3], kingPiece: 'K', rookPiece: 'R', rights: ['K', 'Q'] },
+    { name: 'black king-side', color: 'b', side: 'k', kingFrom: [0, 4], kingTo: [0, 6], rookFrom: [0, 7], rookTo: [0, 5], kingPiece: 'k', rookPiece: 'r', rights: ['k', 'q'] },
+    { name: 'black queen-side', color: 'b', side: 'q', kingFrom: [0, 4], kingTo: [0, 2], rookFrom: [0, 0], rookTo: [0, 3], kingPiece: 'k', rookPiece: 'r', rights: ['k', 'q'] }
+  ]) {
+    const state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], color, { K: true, Q: true, k: true, q: true });
+    const move = legalMovesFor(state, ...kingFrom).find(m => m.castle === side);
+    assert.ok(move, `${name} castle is legal`);
+    makeMove(state, move);
+    assert.equal(state.board[kingTo[0]][kingTo[1]], kingPiece, `${name} king lands on castle square`);
+    assert.equal(state.board[rookTo[0]][rookTo[1]], rookPiece, `${name} rook lands next to king`);
+    assert.equal(state.board[kingFrom[0]][kingFrom[1]], '.', `${name} king origin is cleared`);
+    assert.equal(state.board[rookFrom[0]][rookFrom[1]], '.', `${name} rook origin is cleared`);
+    assert.equal(state.castling[rights[0]], false, `${name} first castling right revoked`);
+    assert.equal(state.castling[rights[1]], false, `${name} second castling right revoked`);
+  }
+});
+
 test('castling is unavailable when rights are true but the rook is missing or replaced', () => {
   for (const { name, board, color, king, missingTo, replacedBoard, replacedTo } of [
     { name: 'white king-side', board: ['....k...', '........', '........', '........', '........', '........', '........', 'R...K...'], replacedBoard: ['....k...', '........', '........', '........', '........', '........', '........', 'R...K..N'], color: 'w', king: [7, 4], missingTo: [7, 6], replacedTo: [7, 6] },
@@ -352,6 +422,43 @@ test('bot turn is deterministic under fake timers/random and only makes legal mo
     assert.equal(boardKey(app.api.getState()), locked);
   } finally {
     app.restore();
+  }
+});
+
+test('game controller uses configured bot delay range', () => {
+  const delays = [];
+  const view = { render() {}, setStatus() {} };
+  const { internals } = createGameControllerSession({
+    view,
+    random: () => 0.5,
+    setTimeoutFn: (_fn, delay) => { delays.push(delay); },
+    config: { botMinDelayMs: 100, botMaxDelayMs: 300 }
+  });
+
+  internals.afterPlayerMove();
+
+  assert.deepEqual(delays, [200]);
+});
+
+test('game controller passes pawnMoveBias and deprecated botPawnMoveBias to bot selection', () => {
+  for (const { name, config } of [
+    { name: 'pawnMoveBias', config: { pawnMoveBias: 1 } },
+    { name: 'botPawnMoveBias', config: { botPawnMoveBias: 1 } }
+  ]) {
+    const view = { render() {}, setStatus() {} };
+    const values = [0, 0];
+    const { internals } = createGameControllerSession({ view, random: () => values.shift() ?? 0, config });
+    internals.game.board = stateFrom(['....k...', 'p.......', '........', '........', '........', '........', '........', '....K.n.'], 'b').board;
+    internals.game.turn = 'b';
+
+    internals.botMove([
+      { from: { r: 7, c: 6 }, to: { r: 5, c: 5 } },
+      { from: { r: 1, c: 0 }, to: { r: 2, c: 0 } }
+    ]);
+
+    assert.equal(internals.game.board[2][0], 'p', `${name} chooses the pawn move when bias is certain`);
+    assert.equal(internals.game.board[1][0], '.');
+    assert.equal(internals.game.turn, 'w');
   }
 });
 
@@ -545,6 +652,9 @@ function commandExists(cmd) {
 }
 
 test('Helm chart renders deployment image from values', { skip: !commandExists('helm') }, () => {
+  const repository = chartRepository();
+  assert.equal(repository, composeImage(), 'compose app image and chart repository stay in sync');
+
   execFileSync('helm', ['lint', 'deploy/chart'], { stdio: 'pipe' });
   const rendered = execFileSync('helm', [
     'template',
@@ -557,8 +667,8 @@ test('Helm chart renders deployment image from values', { skip: !commandExists('
   ], { encoding: 'utf8' });
 
   assert.match(rendered, /kind: Deployment/);
-  assert.match(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:ci-test-tag"/);
-  assert.doesNotMatch(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:latest"/);
+  assert.match(rendered, new RegExp(`image: "${repository.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:ci-test-tag"`));
+  assert.doesNotMatch(rendered, new RegExp(`image: "${repository.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:latest"`));
 });
 
 function httpGet(path, port) {
@@ -588,7 +698,9 @@ async function waitForHttp(path, port, attempts = 20) {
 }
 
 test('Docker Compose config and image build are valid', { skip: !commandExists('docker') }, () => {
-  execFileSync('docker', ['compose', 'config'], { stdio: 'pipe' });
+  const config = execFileSync('docker', ['compose', 'config'], { encoding: 'utf8' });
+  assert.match(config, /context: .*workspace/);
+  assert.match(config, new RegExp(`image: ${composeImage().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   execFileSync('docker', ['compose', 'build', 'app'], { stdio: 'pipe' });
 });
 
@@ -596,9 +708,9 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
   const tempDir = mkdtempSync(join(tmpdir(), 'bad-chess-compose-'));
   const composeFile = join(tempDir, 'compose.yaml');
   const projectName = `bad-chess-test-${process.pid}-${Date.now()}`;
-  writeFileSync(composeFile, `services:\n  app:\n    build:\n      context: ${JSON.stringify(process.cwd())}\n      dockerfile: Dockerfile\n    image: really-bad-chess-web-app:test\n    ports:\n      - "127.0.0.1:0:80"\n`);
+  writeFileSync(composeFile, `services:\n  app:\n    ports: !override\n      - "127.0.0.1:0:8080"\n`);
 
-  const composeArgs = ['compose', '-p', projectName, '-f', composeFile];
+  const composeArgs = ['compose', '-p', projectName, '-f', 'docker-compose.yml', '-f', composeFile];
   const up = spawnSync('docker', [...composeArgs, 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
   if (up.status !== 0) {
     rmSync(tempDir, { recursive: true, force: true });
@@ -610,7 +722,7 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  const mapped = execFileSync('docker', [...composeArgs, 'port', 'app', '80'], { encoding: 'utf8' }).trim();
+  const mapped = execFileSync('docker', [...composeArgs, 'port', 'app', '8080'], { encoding: 'utf8' }).trim();
   const port = Number(mapped.split(':').pop());
   assert.ok(port > 0, `expected mapped port from ${mapped}`);
 
