@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   allLegalMoves,
@@ -15,6 +18,7 @@ import {
 } from '../public/chess-engine.js';
 import { chooseBadBotMove, makeBadBotMove } from '../public/bot.js';
 import { playBadNoise } from '../public/audio.js';
+import { createDomBoardView } from '../public/board-view.js';
 
 let importCounter = 0;
 
@@ -88,7 +92,7 @@ function createAudioContextRecorder() {
   return { AudioContext, calls, oscillators, gains };
 }
 
-async function loadApp({ random = () => 0.99, audioContext } = {}) {
+async function loadApp({ random = () => 0.99, audioContext, modulePath = '../public/app.js' } = {}) {
   const ids = {
     board: new ElementStub('div', 'board'),
     status: new ElementStub('div', 'status'),
@@ -136,7 +140,7 @@ async function loadApp({ random = () => 0.99, audioContext } = {}) {
   };
 
   try {
-    await import(`../public/app.js?test=${importCounter++}`);
+    await import(`${modulePath}?test=${importCounter++}`);
   } catch (err) {
     restore();
     throw err;
@@ -168,6 +172,22 @@ const squareAt = (ids, r, c) => ids.board.children.find(sq => Number(sq.dataset.
 
 test('app module imports successfully with DOM stubs', async () => {
   const app = await loadApp();
+  try {
+    assert.equal(app.ids.board.children.length, 64);
+    assert.equal(typeof app.api.newGame, 'function');
+  } finally {
+    app.restore();
+  }
+});
+
+test('root-level runtime modules syntax-check and import successfully', async () => {
+  execFileSync('node', ['--check', 'app.js'], { stdio: 'pipe' });
+  execFileSync('node', ['--check', 'bot.js'], { stdio: 'pipe' });
+  execFileSync('node', ['--check', 'game-controller.js'], { stdio: 'pipe' });
+  await import(`../bot.js?rootBot=${importCounter++}`);
+  await import(`../game-controller.js?rootController=${importCounter++}`);
+
+  const app = await loadApp({ modulePath: '../app.js' });
   try {
     assert.equal(app.ids.board.children.length, 64);
     assert.equal(typeof app.api.newGame, 'function');
@@ -357,6 +377,27 @@ test('checkmate and stalemate set game over and block further clicks', async () 
   }
 });
 
+test('botMove handles no-legal-move checkmate and stalemate without advancing turn', async () => {
+  const app = await loadApp();
+  try {
+    for (const { board, expectedStatus } of [
+      { board: ['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], expectedStatus: /checkmated/ },
+      { board: ['k.......', '..Q.....', 'K.......', '........', '........', '........', '........', '........'], expectedStatus: /Stalemate/ }
+    ]) {
+      app.api.setState({ board, turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
+      const before = boardKey(app.api.getState());
+      app.api.botMove();
+      const after = app.api.getState();
+      assert.equal(boardKey(after), before);
+      assert.equal(after.turn, 'b');
+      assert.equal(after.gameOver, true);
+      assert.match(app.ids.status.textContent, expectedStatus);
+    }
+  } finally {
+    app.restore();
+  }
+});
+
 test('rendering and click-selection UI behavior is covered, including chaos glitches', async () => {
   const randomValues = [0.01, 0.99, 0.99, 0.99, 0.99, 0.99];
   const app = await loadApp({ random: () => randomValues.shift() ?? 0.99 });
@@ -377,6 +418,34 @@ test('rendering and click-selection UI behavior is covered, including chaos glit
   } finally {
     app.restore();
   }
+});
+
+test('board view clears stale glitch and selection state on repeated renders', () => {
+  const boardEl = new ElementStub('div', 'board');
+  const statusEl = new ElementStub('div', 'status');
+  const documentRef = { createElement: tagName => new ElementStub(tagName) };
+  const view = createDomBoardView({
+    boardEl,
+    statusEl,
+    documentRef,
+    onSquareClick() {},
+    random: () => 0,
+    glitch: { probability: 1, maxOffsetPx: 6, maxRotationDeg: 4 }
+  });
+  const game = createGameState();
+
+  view.render(game, { selected: { r: 7, c: 1 }, legalForSelected: [{ to: { r: 5, c: 0 } }], chaosEnabled: true });
+  assert.ok(boardEl.children.every(sq => sq.classList.contains('glitch')));
+  assert.ok(squareAt({ board: boardEl }, 7, 1).classList.contains('selected'));
+  assert.ok(squareAt({ board: boardEl }, 5, 0).classList.contains('legal'));
+
+  view.render(game, { selected: { r: 6, c: 4 }, legalForSelected: [{ to: { r: 4, c: 4 } }], chaosEnabled: false });
+  assert.ok(boardEl.children.every(sq => !sq.classList.contains('glitch')));
+  assert.ok(boardEl.children.every(sq => !('--x' in sq.style.values) && !('--y' in sq.style.values) && !('--r' in sq.style.values)));
+  assert.equal(squareAt({ board: boardEl }, 7, 1).classList.contains('selected'), false);
+  assert.equal(squareAt({ board: boardEl }, 5, 0).classList.contains('legal'), false);
+  assert.ok(squareAt({ board: boardEl }, 6, 4).classList.contains('selected'));
+  assert.ok(squareAt({ board: boardEl }, 4, 4).classList.contains('legal'));
 });
 
 test('noise button wires Web Audio oscillator and gain settings', async () => {
@@ -475,9 +544,26 @@ function commandExists(cmd) {
   return spawnSync('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }).status === 0;
 }
 
-function httpGet(path) {
+test('Helm chart renders deployment image from values', { skip: !commandExists('helm') }, () => {
+  execFileSync('helm', ['lint', 'deploy/chart'], { stdio: 'pipe' });
+  const rendered = execFileSync('helm', [
+    'template',
+    'test',
+    'deploy/chart',
+    '-f',
+    'deploy/values-staging.yaml',
+    '--set',
+    'image.app.tag=ci-test-tag'
+  ], { encoding: 'utf8' });
+
+  assert.match(rendered, /kind: Deployment/);
+  assert.match(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:ci-test-tag"/);
+  assert.doesNotMatch(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:latest"/);
+});
+
+function httpGet(path, port) {
   return new Promise((resolve, reject) => {
-    const req = http.get({ host: '127.0.0.1', port: 8080, path, timeout: 1000 }, res => {
+    const req = http.get({ host: '127.0.0.1', port, path, timeout: 1000 }, res => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { body += chunk; });
@@ -488,11 +574,11 @@ function httpGet(path) {
   });
 }
 
-async function waitForHttp(path, attempts = 20) {
+async function waitForHttp(path, port, attempts = 20) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     try {
-      return await httpGet(path);
+      return await httpGet(path, port);
     } catch (err) {
       lastErr = err;
       await new Promise(resolve => setTimeout(resolve, 250));
@@ -501,18 +587,34 @@ async function waitForHttp(path, attempts = 20) {
   throw lastErr;
 }
 
-test('Docker Compose serves the app over HTTP', { skip: !commandExists('docker') }, async t => {
+test('Docker Compose config and image build are valid', { skip: !commandExists('docker') }, () => {
   execFileSync('docker', ['compose', 'config'], { stdio: 'pipe' });
-  const up = spawnSync('docker', ['compose', 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
+  execFileSync('docker', ['compose', 'build', 'app'], { stdio: 'pipe' });
+});
+
+test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip: !commandExists('docker') }, async t => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'bad-chess-compose-'));
+  const composeFile = join(tempDir, 'compose.yaml');
+  const projectName = `bad-chess-test-${process.pid}-${Date.now()}`;
+  writeFileSync(composeFile, `services:\n  app:\n    build:\n      context: ${JSON.stringify(process.cwd())}\n      dockerfile: Dockerfile\n    image: really-bad-chess-web-app:test\n    ports:\n      - "127.0.0.1:0:80"\n`);
+
+  const composeArgs = ['compose', '-p', projectName, '-f', composeFile];
+  const up = spawnSync('docker', [...composeArgs, 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
   if (up.status !== 0) {
+    rmSync(tempDir, { recursive: true, force: true });
     t.skip(`docker compose up failed: ${up.stderr || up.stdout}`);
     return;
   }
   t.after(() => {
-    spawnSync('docker', ['compose', 'down'], { stdio: 'ignore' });
+    spawnSync('docker', [...composeArgs, 'down', '--volumes'], { stdio: 'ignore' });
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
-  const index = await waitForHttp('/');
+  const mapped = execFileSync('docker', [...composeArgs, 'port', 'app', '80'], { encoding: 'utf8' }).trim();
+  const port = Number(mapped.split(':').pop());
+  assert.ok(port > 0, `expected mapped port from ${mapped}`);
+
+  const index = await waitForHttp('/', port);
   assert.equal(index.statusCode, 200);
   assert.match(index.body, /<script type="module" src="app\.js"><\/script>/);
 
@@ -527,7 +629,7 @@ test('Docker Compose serves the app over HTTP', { skip: !commandExists('docker')
   ];
 
   for (const [path, expected] of modules) {
-    const response = await waitForHttp(path);
+    const response = await waitForHttp(path, port);
     assert.equal(response.statusCode, 200, `${path} is served`);
     assert.match(response.body, expected, `${path} has expected JavaScript content`);
   }
