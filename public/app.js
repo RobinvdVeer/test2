@@ -37,6 +37,7 @@ controller = createGameController({
 });
 
 window.BadChess = { newGame: controller.newGame };
+window.__badChess = controller;
 
 document.getElementById('newGame').addEventListener('click', controller.newGame);
 document.getElementById('noiseBtn').addEventListener('click', playBadNoise);
