@@ -137,40 +137,42 @@ function cloneBoard() { return game.board.map(row => row.slice()); }
 
 if (typeof window !== 'undefined') {
   window.BadChess = { newGame };
-  window.__badChess = {
-    newGame,
-    render,
-    onSquareClick,
-    afterMove: afterPlayerMove,
-    botMove,
-    allLegalMoves(color) { return engineAllLegalMoves(game, color); },
-    legalMovesFor(r, c) { return engineLegalMovesFor(game, r, c); },
-    pseudoMovesFor(r, c) { return enginePseudoMovesFor(game, r, c); },
-    makeMove(move) { return engineMakeMove(game, move); },
-    checkGameEnd() { return showGameEndIfNeeded().over; },
-    inCheck(color) { return inCheck(game, color); },
-    colorOf,
-    setState(next = {}) {
-      if (next.board) game.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
-      if ('turn' in next) game.turn = next.turn;
-      if ('selected' in next) selected = next.selected;
-      if ('legalForSelected' in next) legalForSelected = next.legalForSelected;
-      if ('enPassant' in next) game.enPassant = next.enPassant;
-      if ('castling' in next) game.castling = { ...next.castling };
-      if ('gameOver' in next) game.gameOver = next.gameOver;
-    },
-    getState() {
-      return {
-        board: cloneBoard(),
-        turn: game.turn,
-        selected,
-        legalForSelected: legalForSelected.slice(),
-        enPassant: game.enPassant,
-        castling: { ...game.castling },
-        gameOver: game.gameOver
-      };
-    }
-  };
+  if (window.__BAD_CHESS_ENABLE_TEST_HOOKS__ === true) {
+    window.__badChess = {
+      newGame,
+      render,
+      onSquareClick,
+      afterMove: afterPlayerMove,
+      botMove,
+      allLegalMoves(color) { return engineAllLegalMoves(game, color); },
+      legalMovesFor(r, c) { return engineLegalMovesFor(game, r, c); },
+      pseudoMovesFor(r, c) { return enginePseudoMovesFor(game, r, c); },
+      makeMove(move) { return engineMakeMove(game, move); },
+      checkGameEnd() { return showGameEndIfNeeded().over; },
+      inCheck(color) { return inCheck(game, color); },
+      colorOf,
+      setState(next = {}) {
+        if (next.board) game.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
+        if ('turn' in next) game.turn = next.turn;
+        if ('selected' in next) selected = next.selected;
+        if ('legalForSelected' in next) legalForSelected = next.legalForSelected;
+        if ('enPassant' in next) game.enPassant = next.enPassant;
+        if ('castling' in next) game.castling = { ...next.castling };
+        if ('gameOver' in next) game.gameOver = next.gameOver;
+      },
+      getState() {
+        return {
+          board: cloneBoard(),
+          turn: game.turn,
+          selected,
+          legalForSelected: legalForSelected.slice(),
+          enPassant: game.enPassant,
+          castling: { ...game.castling },
+          gameOver: game.gameOver
+        };
+      }
+    };
+  }
 }
 
 document.getElementById('newGame').addEventListener('click', newGame);

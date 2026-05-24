@@ -108,12 +108,14 @@ async function loadApp({ random = () => 0.99, audioContext } = {}) {
   const originalClearTimeout = globalThis.clearTimeout;
   const originalAudioContext = globalThis.AudioContext;
   const originalWebkitAudioContext = globalThis.webkitAudioContext;
+  const originalEnableTestHooks = globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
   const recorder = audioContext || createAudioContextRecorder();
 
   globalThis.document = document;
   globalThis.window = globalThis;
   globalThis.AudioContext = recorder.AudioContext;
   globalThis.webkitAudioContext = recorder.AudioContext;
+  globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = true;
   Math.random = random;
   globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
   globalThis.clearTimeout = () => {};
@@ -128,6 +130,8 @@ async function loadApp({ random = () => 0.99, audioContext } = {}) {
     else globalThis.AudioContext = originalAudioContext;
     if (originalWebkitAudioContext === undefined) delete globalThis.webkitAudioContext;
     else globalThis.webkitAudioContext = originalWebkitAudioContext;
+    if (originalEnableTestHooks === undefined) delete globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
+    else globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = originalEnableTestHooks;
   };
 
   try {
