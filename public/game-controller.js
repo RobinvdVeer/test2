@@ -1,4 +1,4 @@
-import { colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove } from './chess-engine.js';
+import { allLegalMoves, colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove, pseudoMovesFor } from './chess-engine.js';
 import { makeBadBotMove } from './bot.js';
 import { PIECES } from './piece-symbols.js';
 
@@ -94,19 +94,62 @@ export function createGameControllerSession({ view, random = Math.random, setTim
     render
   };
 
-  const internals = {
-    get game() { return game; },
-    get selected() { return selected; },
-    set selected(value) { selected = value; },
-    get legalForSelected() { return legalForSelected; },
-    set legalForSelected(value) { legalForSelected = value; },
+  const debugApi = createGameControllerDebugApi({
+    getGame: () => game,
+    getSelected: () => selected,
+    setSelected: value => { selected = value; },
+    getLegalForSelected: () => legalForSelected,
+    setLegalForSelected: value => { legalForSelected = value; },
     newGame,
     render,
     selectSquare,
     afterPlayerMove,
     botMove,
     showGameEndIfNeeded
-  };
+  });
 
-  return { controller, internals };
+  return { controller, debugApi };
+}
+
+function createGameControllerDebugApi(session) {
+  function setState(next = {}) {
+    const game = session.getGame();
+    if (next.board) game.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
+    if ('turn' in next) game.turn = next.turn;
+    if ('selected' in next) session.setSelected(next.selected);
+    if ('legalForSelected' in next) session.setLegalForSelected(next.legalForSelected);
+    if ('enPassant' in next) game.enPassant = next.enPassant;
+    if ('castling' in next) game.castling = { ...next.castling };
+    if ('gameOver' in next) game.gameOver = next.gameOver;
+  }
+
+  function getState() {
+    const game = session.getGame();
+    return {
+      board: game.board.map(row => row.slice()),
+      turn: game.turn,
+      selected: session.getSelected(),
+      legalForSelected: session.getLegalForSelected().slice(),
+      enPassant: game.enPassant,
+      castling: { ...game.castling },
+      gameOver: game.gameOver
+    };
+  }
+
+  return {
+    newGame: session.newGame,
+    render: session.render,
+    selectSquare: session.selectSquare,
+    afterMove: session.afterPlayerMove,
+    botMove: session.botMove,
+    checkGameEnd() { return session.showGameEndIfNeeded().over; },
+    inCheck(color) { return inCheck(session.getGame(), color); },
+    colorOf,
+    setState,
+    getState,
+    allLegalMoves(color) { return allLegalMoves(session.getGame(), color); },
+    legalMovesFor(r, c) { return legalMovesFor(session.getGame(), r, c); },
+    pseudoMovesFor(r, c) { return pseudoMovesFor(session.getGame(), r, c); },
+    makeMove(move) { return makeMove(session.getGame(), move); }
+  };
 }
