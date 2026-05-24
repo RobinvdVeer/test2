@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   allLegalMoves,
@@ -14,6 +17,8 @@ import {
   pseudoMovesFor
 } from '../public/chess-engine.js';
 import { chooseBadBotMove, makeBadBotMove } from '../public/bot.js';
+import { createDomBoardView } from '../public/board-view.js';
+import { createGameController } from '../public/game-controller.js';
 import { playBadNoise } from '../public/audio.js';
 
 let importCounter = 0;
@@ -88,7 +93,7 @@ function createAudioContextRecorder() {
   return { AudioContext, calls, oscillators, gains };
 }
 
-async function loadApp({ random = () => 0.99, audioContext } = {}) {
+async function loadApp({ random = () => 0.99, audioContext, modulePath = '../public/app.js' } = {}) {
   const ids = {
     board: new ElementStub('div', 'board'),
     status: new ElementStub('div', 'status'),
@@ -136,7 +141,7 @@ async function loadApp({ random = () => 0.99, audioContext } = {}) {
   };
 
   try {
-    await import(`../public/app.js?test=${importCounter++}`);
+    await import(`${modulePath}?test=${importCounter++}`);
   } catch (err) {
     restore();
     throw err;
@@ -170,6 +175,20 @@ test('app module imports successfully with DOM stubs', async () => {
   const app = await loadApp();
   try {
     assert.equal(app.ids.board.children.length, 64);
+    assert.equal(typeof app.api.newGame, 'function');
+  } finally {
+    app.restore();
+  }
+});
+
+test('root-level browser entrypoints import successfully', async () => {
+  await import(`../bot.js?test=${importCounter++}`);
+  await import(`../game-controller.js?test=${importCounter++}`);
+
+  const app = await loadApp({ modulePath: '../app.js' });
+  try {
+    assert.equal(app.ids.board.children.length, 64);
+    assert.equal(typeof globalThis.BadChess.newGame, 'function');
     assert.equal(typeof app.api.newGame, 'function');
   } finally {
     app.restore();
@@ -379,6 +398,67 @@ test('rendering and click-selection UI behavior is covered, including chaos glit
   }
 });
 
+test('board view clears stale glitch styling on later renders', () => {
+  const boardEl = new ElementStub('div', 'board');
+  const statusEl = new ElementStub('div', 'status');
+  const documentRef = { createElement: tagName => new ElementStub(tagName) };
+  const randomValues = [0, 0.5, 0.5, 0.5];
+  const view = createDomBoardView({
+    boardEl,
+    statusEl,
+    documentRef,
+    onSquareClick: () => {},
+    random: () => randomValues.shift() ?? 0.99,
+    glitch: { probability: 1, maxOffsetPx: 2, maxRotationDeg: 2 }
+  });
+  const state = createGameState();
+
+  view.render(state, { chaosEnabled: true });
+  const firstSquare = boardEl.children[0];
+  assert.ok(firstSquare.classList.contains('glitch'));
+  assert.equal(firstSquare.style.values['--x'], '0px');
+  assert.equal(firstSquare.style.values['--y'], '0px');
+  assert.equal(firstSquare.style.values['--r'], '0deg');
+
+  view.render(state, { chaosEnabled: false });
+  assert.equal(firstSquare.classList.contains('glitch'), false);
+  assert.deepEqual(firstSquare.style.values, {});
+});
+
+test('game controller honors injected chaos, delay config, and botPawnMoveBias alias', () => {
+  const renderCalls = [];
+  const statuses = [];
+  const timers = [];
+  const view = {
+    render(game, options) {
+      renderCalls.push({ turn: game.turn, board: boardKey(game), options });
+    },
+    setStatus(status) { statuses.push(status); }
+  };
+  const randomValues = [0.25, 0, 0];
+  const controller = createGameController({
+    view,
+    random: () => randomValues.shift() ?? 0,
+    setTimeoutFn: (fn, delay) => { timers.push({ fn, delay }); return timers.length; },
+    chaosEnabled: () => true,
+    config: { botPawnMoveBias: 1, botMinDelayMs: 100, botMaxDelayMs: 500 }
+  });
+
+  controller.newGame();
+  assert.equal(renderCalls.at(-1).options.chaosEnabled, true);
+  controller.selectSquare(6, 0);
+  controller.selectSquare(4, 0);
+
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 200);
+  timers[0].fn();
+
+  const finalRender = renderCalls.at(-1);
+  assert.equal(finalRender.turn, 'w');
+  assert.match(statuses.at(-1), /Your move|CHECK/);
+  assert.match(finalRender.board, /^rnbqkbnr\/\.ppppppp\/p/);
+});
+
 test('noise button wires Web Audio oscillator and gain settings', async () => {
   const app = await loadApp({ random: () => 0.5 });
   try {
@@ -475,9 +555,47 @@ function commandExists(cmd) {
   return spawnSync('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }).status === 0;
 }
 
-function httpGet(path) {
+function dockerAvailable() {
+  return commandExists('docker') && spawnSync('docker', ['info'], { stdio: 'ignore' }).status === 0;
+}
+
+test('Helm chart renders values-driven web image and matching selectors', { skip: !commandExists('helm') }, () => {
+  const rendered = execFileSync('helm', [
+    'template', 'test', 'deploy/chart',
+    '-f', 'deploy/values-staging.yaml',
+    '--set', 'image.web.repository=example.com/acme/web',
+    '--set', 'image.web.tag=abc123'
+  ], { encoding: 'utf8' });
+
+  assert.match(rendered, /kind: Service[\s\S]*name: test-really-bad-chess-web-app-web/);
+  assert.match(rendered, /kind: Deployment[\s\S]*name: test-really-bad-chess-web-app-web/);
+  assert.match(rendered, /image: "example\.com\/acme\/web:abc123"/);
+  assert.match(rendered, /selector:[\s\S]*app\.kubernetes\.io\/component: web/);
+  assert.match(rendered, /matchLabels:[\s\S]*app\.kubernetes\.io\/component: web/);
+});
+
+test('Helm chart renders enabled ingress host, TLS, and backend', { skip: !commandExists('helm') }, () => {
+  const rendered = execFileSync('helm', [
+    'template', 'test', 'deploy/chart',
+    '--set', 'ingress.enabled=true',
+    '--set', 'ingress.hosts[0].host=chess.example.test',
+    '--set', 'ingress.hosts[0].paths[0].path=/play',
+    '--set', 'ingress.hosts[0].paths[0].pathType=Prefix',
+    '--set', 'ingress.tls[0].secretName=chess-tls',
+    '--set', 'ingress.tls[0].hosts[0]=chess.example.test'
+  ], { encoding: 'utf8' });
+
+  assert.match(rendered, /kind: Ingress/);
+  assert.match(rendered, /host: "chess\.example\.test"/);
+  assert.match(rendered, /secretName: chess-tls/);
+  assert.match(rendered, /path: \/play/);
+  assert.match(rendered, /pathType: Prefix/);
+  assert.match(rendered, /service:\n\s+name: test-really-bad-chess-web-app-web\n\s+port:\n\s+number: 80/);
+});
+
+function httpGet(path, port) {
   return new Promise((resolve, reject) => {
-    const req = http.get({ host: '127.0.0.1', port: 8080, path, timeout: 1000 }, res => {
+    const req = http.get({ host: '127.0.0.1', port, path, timeout: 1000 }, res => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { body += chunk; });
@@ -488,11 +606,11 @@ function httpGet(path) {
   });
 }
 
-async function waitForHttp(path, attempts = 20) {
+async function waitForHttp(path, port, attempts = 20) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     try {
-      return await httpGet(path);
+      return await httpGet(path, port);
     } catch (err) {
       lastErr = err;
       await new Promise(resolve => setTimeout(resolve, 250));
@@ -501,18 +619,26 @@ async function waitForHttp(path, attempts = 20) {
   throw lastErr;
 }
 
-test('Docker Compose serves the app over HTTP', { skip: !commandExists('docker') }, async t => {
-  execFileSync('docker', ['compose', 'config'], { stdio: 'pipe' });
-  const up = spawnSync('docker', ['compose', 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
-  if (up.status !== 0) {
-    t.skip(`docker compose up failed: ${up.stderr || up.stdout}`);
-    return;
-  }
+test('Docker Compose serves the app over HTTP', { skip: !dockerAvailable() }, async t => {
+  const projectName = `bad-chess-test-${process.pid}`;
+  const tempDir = mkdtempSync(join(tmpdir(), 'bad-chess-compose-'));
+  const overridePath = join(tempDir, 'compose.override.yml');
+  writeFileSync(overridePath, `services:\n  web:\n    ports: !override\n      - target: 80\n        published: \"0\"\n        host_ip: 127.0.0.1\n        protocol: tcp\n`);
+  const composeArgs = ['compose', '-p', projectName, '-f', 'docker-compose.yml', '-f', overridePath];
+
+  execFileSync('docker', [...composeArgs, 'config'], { stdio: 'pipe' });
+  const up = spawnSync('docker', [...composeArgs, 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
+  assert.equal(up.status, 0, up.stderr || up.stdout);
   t.after(() => {
-    spawnSync('docker', ['compose', 'down'], { stdio: 'ignore' });
+    spawnSync('docker', [...composeArgs, 'down'], { stdio: 'ignore' });
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
-  const index = await waitForHttp('/');
+  const portOutput = execFileSync('docker', [...composeArgs, 'port', 'web', '80'], { encoding: 'utf8' }).trim();
+  const port = Number(portOutput.split(':').pop());
+  assert.ok(Number.isInteger(port) && port > 0, `expected mapped port from ${portOutput}`);
+
+  const index = await waitForHttp('/', port);
   assert.equal(index.statusCode, 200);
   assert.match(index.body, /<script type="module" src="app\.js"><\/script>/);
 
@@ -527,7 +653,7 @@ test('Docker Compose serves the app over HTTP', { skip: !commandExists('docker')
   ];
 
   for (const [path, expected] of modules) {
-    const response = await waitForHttp(path);
+    const response = await waitForHttp(path, port);
     assert.equal(response.statusCode, 200, `${path} is served`);
     assert.match(response.body, expected, `${path} has expected JavaScript content`);
   }

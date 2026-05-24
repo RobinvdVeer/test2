@@ -1,6 +1,6 @@
 import { allLegalMoves as engineAllLegalMoves, checkGameEnd, colorOf, createGameState, inCheck, legalMovesFor as engineLegalMovesFor, makeMove as engineMakeMove, pseudoMovesFor as enginePseudoMovesFor } from './public/chess-engine.js';
 import { playBadNoise } from './public/audio.js';
-import { PIECES } from './piece-symbols.js';
+import { PIECES } from './public/piece-symbols.js';
 import { makeBadBotMove } from './bot.js';
 
 // Configuration knobs for maintainers who want to tune the badness without spelunking.

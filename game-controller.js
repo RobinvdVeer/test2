@@ -1,6 +1,6 @@
 import { allLegalMoves, colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove } from './public/chess-engine.js';
 import { makeBadBotMove } from './bot.js';
-import { PIECES } from './piece-symbols.js';
+import { PIECES } from './public/piece-symbols.js';
 
 export function createGameController({ view, random = Math.random, setTimeoutFn = setTimeout, config = {} }) {
   const pawnMoveBias = config.pawnMoveBias ?? config.botPawnMoveBias ?? 0.7;
