@@ -169,11 +169,28 @@ export function makeMove(state, move) {
 
 function applyMoveTo(board, move) {
   const p = board[move.from.r][move.from.c];
+  const undo = {
+    move,
+    piece: p,
+    captured: board[move.to.r][move.to.c],
+    enPassantCaptured: move.enPassant ? board[move.from.r][move.to.c] : null
+  };
+
   board[move.from.r][move.from.c] = '.';
   if (move.enPassant) board[move.from.r][move.to.c] = '.';
   board[move.to.r][move.to.c] = move.promotion || p;
   if (move.castle === 'k') moveRookForCastle(board, move.to.r, 7, 5);
   if (move.castle === 'q') moveRookForCastle(board, move.to.r, 0, 3);
+  return undo;
+}
+
+function undoMove(board, undo) {
+  const { move } = undo;
+  board[move.from.r][move.from.c] = undo.piece;
+  board[move.to.r][move.to.c] = undo.captured;
+  if (move.enPassant) board[move.from.r][move.to.c] = undo.enPassantCaptured;
+  if (move.castle === 'k') moveRookForCastle(board, move.to.r, 5, 7);
+  if (move.castle === 'q') moveRookForCastle(board, move.to.r, 3, 0);
 }
 
 function moveRookForCastle(board, row, fromC, toC) {
