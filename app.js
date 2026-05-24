@@ -1,3 +1,4 @@
+(() => {
 const PIECES = {
   K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙',
   k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟'
@@ -7,6 +8,14 @@ const start = [
   'rnbqkbnr', 'pppppppp', '........', '........',
   '........', '........', 'PPPPPPPP', 'RNBQKBNR'
 ];
+
+// Configuration knobs for maintainers who want to tune the badness without spelunking.
+const GLITCH_PROBABILITY = 0.08;
+const GLITCH_MAX_OFFSET_PX = 6;
+const GLITCH_MAX_ROTATION_DEG = 4;
+const BOT_PAWN_MOVE_BIAS = 0.7;
+const BOT_MIN_DELAY_MS = 550;
+const BOT_MAX_DELAY_MS = 1250;
 
 let board, turn, selected, legalForSelected, enPassant, castling, gameOver;
 const boardEl = document.getElementById('board');
@@ -43,11 +52,11 @@ function render() {
       sq.className = `square ${(r + c) % 2 ? 'dark' : 'light'}`;
       if (selected && selected.r === r && selected.c === c) sq.classList.add('selected');
       if (legalKeys.has(`${r},${c}`)) sq.classList.add('legal');
-      if (chaosEl.checked && Math.random() < 0.08) {
+      if (chaosEl.checked && Math.random() < GLITCH_PROBABILITY) {
         sq.classList.add('glitch');
-        sq.style.setProperty('--x', `${Math.floor(Math.random() * 13) - 6}px`);
-        sq.style.setProperty('--y', `${Math.floor(Math.random() * 13) - 6}px`);
-        sq.style.setProperty('--r', `${Math.floor(Math.random() * 9) - 4}deg`);
+        sq.style.setProperty('--x', `${randomSignedInt(GLITCH_MAX_OFFSET_PX)}px`);
+        sq.style.setProperty('--y', `${randomSignedInt(GLITCH_MAX_OFFSET_PX)}px`);
+        sq.style.setProperty('--r', `${randomSignedInt(GLITCH_MAX_ROTATION_DEG)}deg`);
       }
       sq.dataset.r = r; sq.dataset.c = c;
       const p = board[r][c];
@@ -90,7 +99,7 @@ function afterMove() {
   render();
   if (checkGameEnd()) return;
   setStatus('Bot thinking very incorrectly...');
-  setTimeout(botMove, 550 + Math.random() * 700);
+  setTimeout(botMove, randomDelay(BOT_MIN_DELAY_MS, BOT_MAX_DELAY_MS));
 }
 
 function botMove() {
@@ -99,7 +108,7 @@ function botMove() {
   if (!moves.length) return checkGameEnd();
   // Bad bot: heavily prefers random pawn moves, otherwise random chaos.
   const pawnMoves = moves.filter(m => board[m.from.r][m.from.c].toLowerCase() === 'p');
-  const pool = pawnMoves.length && Math.random() < 0.7 ? pawnMoves : moves;
+  const pool = pawnMoves.length && Math.random() < BOT_PAWN_MOVE_BIAS ? pawnMoves : moves;
   makeMove(pool[Math.floor(Math.random() * pool.length)]);
   turn = 'w';
   render();
@@ -107,6 +116,8 @@ function botMove() {
 }
 
 function setStatus(s) { statusEl.textContent = s; }
+function randomSignedInt(maxAbs) { return Math.floor(Math.random() * (maxAbs * 2 + 1)) - maxAbs; }
+function randomDelay(min, max) { return min + Math.random() * (max - min); }
 
 function allLegalMoves(color) {
   const out = [];
@@ -255,4 +266,6 @@ document.getElementById('noiseBtn').addEventListener('click', () => {
   osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + 0.15);
 });
 chaosEl.addEventListener('change', render);
+window.BadChess = { newGame };
 newGame();
+})();
