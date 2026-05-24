@@ -29,7 +29,6 @@ export function inCheck(state, color) { return isInCheck(state.board, color); }
 
 function inBounds(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
 function pieceAt(state, r, c) { return state.board[r][c]; }
-function cloneBoard(board) { return board.map(row => row.slice()); }
 
 export function allLegalMoves(state, color) {
   const out = [];
@@ -42,9 +41,10 @@ export function allLegalMoves(state, color) {
 export function legalMovesFor(state, r, c) {
   const color = colorOf(pieceAt(state, r, c));
   return pseudoMovesFor(state, r, c).filter(m => {
-    const board = cloneBoard(state.board);
-    applyMoveTo(board, m);
-    return !isInCheck(board, color);
+    const undo = applyMoveTo(state.board, m, { trackUndo: true });
+    const legal = !isInCheck(state.board, color);
+    undoMove(state.board, undo);
+    return legal;
   });
 }
 
@@ -145,26 +145,32 @@ export function makeMove(state, move) {
   state.enPassant = move.doublePawn ? { r: (move.from.r + move.to.r) / 2, c: move.from.c } : null;
 }
 
-function applyMoveTo(board, move) {
+function applyMoveTo(board, move, { trackUndo = false } = {}) {
   const p = board[move.from.r][move.from.c];
-  const undo = {
-    move,
-    fromPiece: p,
-    toPiece: board[move.to.r][move.to.c],
-    enPassantPiece: move.enPassant ? board[move.from.r][move.to.c] : null,
-    castleRook: move.castle ? {
-      fromC: move.castle === 'k' ? 7 : 0,
-      toC: move.castle === 'k' ? 5 : 3,
-      fromPiece: board[move.to.r][move.castle === 'k' ? 7 : 0],
-      toPiece: board[move.to.r][move.castle === 'k' ? 5 : 3]
-    } : null
-  };
+  const undo = trackUndo ? createUndo(board, move, p) : null;
   board[move.from.r][move.from.c] = '.';
   if (move.enPassant) board[move.from.r][move.to.c] = '.';
   board[move.to.r][move.to.c] = move.promotion || p;
   if (move.castle === 'k') { board[move.to.r][5] = board[move.to.r][7]; board[move.to.r][7] = '.'; }
   if (move.castle === 'q') { board[move.to.r][3] = board[move.to.r][0]; board[move.to.r][0] = '.'; }
   return undo;
+}
+
+function createUndo(board, move, fromPiece) {
+  const rookFromC = move.castle === 'k' ? 7 : 0;
+  const rookToC = move.castle === 'k' ? 5 : 3;
+  return {
+    move,
+    fromPiece,
+    toPiece: board[move.to.r][move.to.c],
+    enPassantPiece: move.enPassant ? board[move.from.r][move.to.c] : null,
+    castleRook: move.castle ? {
+      fromC: rookFromC,
+      toC: rookToC,
+      fromPiece: board[move.to.r][rookFromC],
+      toPiece: board[move.to.r][rookToC]
+    } : null
+  };
 }
 
 function undoMove(board, undo) {
