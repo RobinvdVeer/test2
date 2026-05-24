@@ -12,7 +12,7 @@ import {
   makeMove,
   pseudoMovesFor
 } from '../public/chess-engine.js';
-import { makeBadBotMove } from '../bot.js';
+import { makeBadBotMove } from '../public/bot.js';
 import { playBadNoise } from '../public/audio.js';
 
 let importCounter = 0;
@@ -108,12 +108,14 @@ async function loadApp({ random = () => 0.99, audioContext } = {}) {
   const originalClearTimeout = globalThis.clearTimeout;
   const originalAudioContext = globalThis.AudioContext;
   const originalWebkitAudioContext = globalThis.webkitAudioContext;
+  const originalTestHooksFlag = globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
   const recorder = audioContext || createAudioContextRecorder();
 
   globalThis.document = document;
   globalThis.window = globalThis;
   globalThis.AudioContext = recorder.AudioContext;
   globalThis.webkitAudioContext = recorder.AudioContext;
+  globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = true;
   Math.random = random;
   globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
   globalThis.clearTimeout = () => {};
@@ -128,10 +130,12 @@ async function loadApp({ random = () => 0.99, audioContext } = {}) {
     else globalThis.AudioContext = originalAudioContext;
     if (originalWebkitAudioContext === undefined) delete globalThis.webkitAudioContext;
     else globalThis.webkitAudioContext = originalWebkitAudioContext;
+    if (originalTestHooksFlag === undefined) delete globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
+    else globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = originalTestHooksFlag;
   };
 
   try {
-    await import(`../app.js?test=${importCounter++}`);
+    await import(`../public/app.js?test=${importCounter++}`);
   } catch (err) {
     restore();
     throw err;

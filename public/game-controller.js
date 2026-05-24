@@ -1,8 +1,14 @@
-import { allLegalMoves, colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove } from './chess-engine.js';
+import { allLegalMoves, colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove, pseudoMovesFor } from './chess-engine.js';
 import { makeBadBotMove } from './bot.js';
 import { PIECES } from './piece-symbols.js';
 
-export function createGameController({ view, random = Math.random, setTimeoutFn = setTimeout, config = {} }) {
+export const DEBUG_API = Symbol('BadChess.debugApi');
+
+export function getGameControllerDebugApi(controller) {
+  return controller[DEBUG_API];
+}
+
+export function createGameController({ view, random = Math.random, setTimeoutFn = setTimeout, chaosEnabled = () => false, config = {} }) {
   const botPawnMoveBias = config.botPawnMoveBias ?? 0.7;
   const botMinDelayMs = config.botMinDelayMs ?? 550;
   const botMaxDelayMs = config.botMaxDelayMs ?? 1250;
@@ -72,7 +78,7 @@ export function createGameController({ view, random = Math.random, setTimeoutFn 
   }
 
   function render() {
-    view.render(game, { selected, legalForSelected });
+    view.render(game, { selected, legalForSelected, chaosEnabled: chaosEnabled() });
   }
 
   function setStatus(status) {
@@ -105,17 +111,30 @@ export function createGameController({ view, random = Math.random, setTimeoutFn 
     };
   }
 
-  return {
+  const controller = {
     newGame,
     selectSquare,
-    afterPlayerMove,
-    botMove,
-    showGameEndIfNeeded,
-    render,
-    setState,
-    getState,
-    allLegalMoves(color) { return allLegalMoves(game, color); },
-    legalMovesFor(r, c) { return legalMovesFor(game, r, c); },
-    makeMove(move) { return makeMove(game, move); }
+    render
   };
+
+  Object.defineProperty(controller, DEBUG_API, {
+    value: {
+      newGame,
+      render,
+      selectSquare,
+      afterMove: afterPlayerMove,
+      botMove,
+      checkGameEnd() { return showGameEndIfNeeded(); },
+      inCheck(color) { return inCheck(game, color); },
+      colorOf,
+      setState,
+      getState,
+      allLegalMoves(color) { return allLegalMoves(game, color); },
+      legalMovesFor(r, c) { return legalMovesFor(game, r, c); },
+      pseudoMovesFor(r, c) { return pseudoMovesFor(game, r, c); },
+      makeMove(move) { return makeMove(game, move); }
+    }
+  });
+
+  return controller;
 }
