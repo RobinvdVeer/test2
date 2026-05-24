@@ -1,12 +1,12 @@
 import { allLegalMoves, makeMove } from './public/chess-engine.js';
 
-export function chooseBadBotMove(state, { pawnBias = 0.7, random = Math.random } = {}) {
-  const moves = allLegalMoves(state, 'b');
+export function chooseBadBotMove(state, { pawnBias, pawnMoveBias = 0.7, random = Math.random, moves = allLegalMoves(state, 'b') } = {}) {
   if (!moves.length) return null;
 
   // Bad bot: heavily prefers random pawn moves, otherwise random chaos.
+  const bias = pawnBias ?? pawnMoveBias;
   const pawnMoves = moves.filter(m => state.board[m.from.r][m.from.c].toLowerCase() === 'p');
-  const pool = pawnMoves.length && random() < pawnBias ? pawnMoves : moves;
+  const pool = pawnMoves.length && random() < bias ? pawnMoves : moves;
   return pool[Math.floor(random() * pool.length)];
 }
 

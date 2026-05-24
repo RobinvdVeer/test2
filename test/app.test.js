@@ -15,6 +15,131 @@ import {
 import { makeBadBotMove } from '../bot.js';
 import { playBadNoise } from '../public/audio.js';
 
+let importCounter = 0;
+
+function createClassList(el) {
+  const classes = new Set();
+  const sync = () => { el._className = [...classes].join(' '); };
+  return {
+    add(...names) { names.forEach(name => classes.add(name)); sync(); },
+    remove(...names) { names.forEach(name => classes.delete(name)); sync(); },
+    contains(name) { return classes.has(name); },
+    _set(value) { classes.clear(); String(value).split(/\s+/).filter(Boolean).forEach(name => classes.add(name)); sync(); }
+  };
+}
+
+class ElementStub {
+  constructor(tagName, id = '') {
+    this.tagName = tagName.toUpperCase();
+    this.id = id;
+    this.children = [];
+    this.dataset = {};
+    this.style = {
+      values: {},
+      setProperty: (k, v) => { this.style.values[k] = v; },
+      removeProperty: k => { delete this.style.values[k]; }
+    };
+    this.listeners = {};
+    this.checked = false;
+    this._innerHTML = '';
+    this._textContent = '';
+    this.classList = createClassList(this);
+  }
+  set className(value) { this.classList._set(value); }
+  get className() { return this._className || ''; }
+  set innerHTML(value) { this._innerHTML = String(value); this.children = []; }
+  get innerHTML() { return this._innerHTML; }
+  set textContent(value) { this._textContent = String(value); }
+  get textContent() { return this._textContent; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  dispatchEvent(event) { (this.listeners[event.type] || []).forEach(fn => fn({ ...event, currentTarget: this, target: this })); }
+  click() { this.dispatchEvent({ type: 'click' }); }
+}
+
+function createAudioContextRecorder() {
+  const calls = [];
+  const oscillators = [];
+  const gains = [];
+  function AudioContext() {
+    this.currentTime = 10;
+    this.destination = { kind: 'destination' };
+    this.createOscillator = () => {
+      const oscillator = {
+        type: '',
+        frequency: { value: 0 },
+        connect: target => calls.push(['osc.connect', target]),
+        start: () => calls.push(['osc.start']),
+        stop: time => calls.push(['osc.stop', time])
+      };
+      oscillators.push(oscillator);
+      return oscillator;
+    };
+    this.createGain = () => {
+      const gain = {
+        gain: { value: 0 },
+        connect: target => calls.push(['gain.connect', target])
+      };
+      gains.push(gain);
+      return gain;
+    };
+  }
+  return { AudioContext, calls, oscillators, gains };
+}
+
+async function loadApp({ random = () => 0.99, audioContext } = {}) {
+  const ids = {
+    board: new ElementStub('div', 'board'),
+    status: new ElementStub('div', 'status'),
+    chaos: new ElementStub('input', 'chaos'),
+    newGame: new ElementStub('button', 'newGame'),
+    noiseBtn: new ElementStub('button', 'noiseBtn')
+  };
+  ids.chaos.checked = true;
+  const timers = [];
+  const document = {
+    getElementById(id) { return ids[id]; },
+    createElement(tagName) { return new ElementStub(tagName); }
+  };
+  const originalDocument = globalThis.document;
+  const originalWindow = globalThis.window;
+  const originalRandom = Math.random;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const originalAudioContext = globalThis.AudioContext;
+  const originalWebkitAudioContext = globalThis.webkitAudioContext;
+  const recorder = audioContext || createAudioContextRecorder();
+
+  globalThis.document = document;
+  globalThis.window = globalThis;
+  globalThis.AudioContext = recorder.AudioContext;
+  globalThis.webkitAudioContext = recorder.AudioContext;
+  Math.random = random;
+  globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
+  globalThis.clearTimeout = () => {};
+
+  const restore = () => {
+    globalThis.document = originalDocument;
+    globalThis.window = originalWindow;
+    Math.random = originalRandom;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    if (originalAudioContext === undefined) delete globalThis.AudioContext;
+    else globalThis.AudioContext = originalAudioContext;
+    if (originalWebkitAudioContext === undefined) delete globalThis.webkitAudioContext;
+    else globalThis.webkitAudioContext = originalWebkitAudioContext;
+  };
+
+  try {
+    await import(`../app.js?test=${importCounter++}`);
+  } catch (err) {
+    restore();
+    throw err;
+  }
+
+  return { api: globalThis.__badChess, ids, timers, audio: recorder, restore };
+}
+
 function stateFrom(boardOrNext, turn = 'w', castling = { K: false, Q: false, k: false, q: false }, enPassant = null) {
   if (Array.isArray(boardOrNext)) {
     return { board: boardOrNext.map(row => row.split('')), turn, enPassant, castling: { ...castling }, gameOver: false };
@@ -33,6 +158,17 @@ function stateFrom(boardOrNext, turn = 'w', castling = { K: false, Q: false, k: 
 const destinations = moves => moves.map(m => `${m.to.r},${m.to.c}`).sort();
 const hasMove = (moves, r, c, prop) => moves.some(m => m.to.r === r && m.to.c === c && (!prop || m[prop]));
 const boardKey = state => state.board.map(r => r.join('')).join('/');
+const squareAt = (ids, r, c) => ids.board.children.find(sq => Number(sq.dataset.r) === r && Number(sq.dataset.c) === c);
+
+test('app module imports successfully with DOM stubs', async () => {
+  const app = await loadApp();
+  try {
+    assert.equal(app.ids.board.children.length, 64);
+    assert.equal(typeof app.api.newGame, 'function');
+  } finally {
+    app.restore();
+  }
+});
 
 test('core move generator covers initial moves, piece movement, blocking, captures, and pinned pieces', () => {
   let state = createGameState();
@@ -150,6 +286,93 @@ test('bot is deterministic with injected random and only makes legal moves', () 
   assert.equal(inCheck(locked, 'w'), false);
 });
 
+test('bot turn is deterministic under fake timers/random and only makes legal moves', async () => {
+  const randomValues = [0.99, 0.99, 0.99, 0.99, 0.99, 0.99, 0, 0];
+  const app = await loadApp({ random: () => randomValues.shift() ?? 0.99 });
+  try {
+    app.ids.chaos.checked = false;
+    app.api.render();
+    squareAt(app.ids, 6, 4).click();
+    squareAt(app.ids, 4, 4).click();
+
+    assert.equal(app.api.getState().turn, 'b');
+    assert.equal(app.timers.length, 1);
+    assert.match(app.ids.status.textContent, /Bot thinking/);
+    const beforeBot = boardKey(app.api.getState());
+    app.timers[0].fn();
+    const afterBot = app.api.getState();
+    assert.equal(afterBot.turn, 'w');
+    assert.notEqual(boardKey(afterBot), beforeBot);
+    assert.match(app.ids.status.textContent, /Your move|CHECK/);
+
+    app.api.setState({ board: ['....k...', '........', '........', '........', '........', '........', '........', '....K...'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: true });
+    const locked = boardKey(app.api.getState());
+    app.api.botMove();
+    assert.equal(boardKey(app.api.getState()), locked);
+  } finally {
+    app.restore();
+  }
+});
+
+test('checkmate and stalemate set game over and block further clicks', async () => {
+  const app = await loadApp();
+  try {
+    app.ids.chaos.checked = false;
+
+    app.api.setState({ board: ['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
+    assert.equal(app.api.checkGameEnd(), true);
+    assert.match(app.ids.status.textContent, /checkmated/);
+    assert.equal(app.api.getState().gameOver, true);
+    const before = boardKey(app.api.getState());
+    app.api.render();
+    squareAt(app.ids, 1, 1).click();
+    assert.equal(boardKey(app.api.getState()), before);
+
+    app.api.setState({ board: ['k.......', '..Q.....', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
+    assert.equal(app.api.checkGameEnd(), true);
+    assert.match(app.ids.status.textContent, /Stalemate/);
+  } finally {
+    app.restore();
+  }
+});
+
+test('rendering and click-selection UI behavior is covered, including chaos glitches', async () => {
+  const randomValues = [0.01, 0.99, 0.99, 0.99, 0.99, 0.99];
+  const app = await loadApp({ random: () => randomValues.shift() ?? 0.99 });
+  try {
+    assert.equal(app.ids.board.children.length, 64);
+    assert.match(app.ids.board.children[0].innerHTML, /♜/);
+    assert.ok(app.ids.board.children.some(sq => sq.classList.contains('glitch')));
+
+    app.ids.chaos.checked = false;
+    app.api.newGame();
+    squareAt(app.ids, 0, 0).click();
+    assert.match(app.ids.status.textContent, /not your piece/);
+
+    squareAt(app.ids, 7, 1).click();
+    assert.match(app.ids.status.textContent, /♘ selected/);
+    assert.ok(squareAt(app.ids, 7, 1).classList.contains('selected'));
+    assert.equal(app.ids.board.children.filter(sq => sq.classList.contains('legal')).length, 2);
+  } finally {
+    app.restore();
+  }
+});
+
+test('noise button wires Web Audio oscillator and gain settings', async () => {
+  const app = await loadApp({ random: () => 0.5 });
+  try {
+    app.ids.noiseBtn.click();
+    assert.equal(app.audio.oscillators[0].type, 'square');
+    assert.equal(app.audio.oscillators[0].frequency.value, 610);
+    assert.equal(app.audio.gains[0].gain.value, 0.05);
+    assert.equal(app.audio.calls[0][0], 'osc.connect');
+    assert.equal(app.audio.calls[1][0], 'gain.connect');
+    assert.deepEqual(app.audio.calls.slice(2), [['osc.start'], ['osc.stop', 10.15]]);
+  } finally {
+    app.restore();
+  }
+});
+
 test('makeBadBotMove returns false and leaves state unchanged when black has no moves', () => {
   const state = stateFrom(['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], 'b');
   const before = boardKey(state);
@@ -183,22 +406,24 @@ test('makeBadBotMove can use fallback all-moves branch with controlled random', 
   assert.notEqual(boardKey(state), boardKey(createGameState()), 'some legal black move was made from all-moves pool');
 });
 
-test('playBadNoise documents missing Web Audio support by throwing', () => {
+test('playBadNoise documents missing Web Audio support by throwing', async () => {
   const originalWindow = globalThis.window;
   globalThis.window = {};
   try {
-    assert.throws(() => playBadNoise(), TypeError);
+    const audio = await import(`../public/audio.js?missingAudio=${importCounter++}`);
+    assert.throws(() => audio.playBadNoise(), TypeError);
   } finally {
     globalThis.window = originalWindow;
   }
 });
 
-test('playBadNoise documents AudioContext constructor errors by propagating them', () => {
+test('playBadNoise documents AudioContext constructor errors by propagating them', async () => {
   const originalWindow = globalThis.window;
   const err = new Error('blocked audio');
   globalThis.window = { AudioContext: function AudioContext() { throw err; } };
   try {
-    assert.throws(() => playBadNoise(), err);
+    const audio = await import(`../public/audio.js?blockedAudio=${importCounter++}`);
+    assert.throws(() => audio.playBadNoise(), err);
   } finally {
     globalThis.window = originalWindow;
   }
