@@ -1,4 +1,4 @@
-import { colorOf } from './public/chess-engine.js';
+import { colorOf } from './chess-engine.js';
 import { PIECES } from './piece-symbols.js';
 
 export function createDomBoardView({ boardEl, statusEl, chaosEl, onSquareClick, random = Math.random, glitch = {} }) {

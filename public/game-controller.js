@@ -1,4 +1,4 @@
-import { allLegalMoves, colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove } from './public/chess-engine.js';
+import { allLegalMoves, colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove } from './chess-engine.js';
 import { makeBadBotMove } from './bot.js';
 import { PIECES } from './piece-symbols.js';
 
