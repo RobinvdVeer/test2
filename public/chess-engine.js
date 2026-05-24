@@ -42,9 +42,10 @@ export function allLegalMoves(state, color) {
 export function legalMovesFor(state, r, c) {
   const color = colorOf(pieceAt(state, r, c));
   return pseudoMovesFor(state, r, c).filter(m => {
-    const board = cloneBoard(state.board);
-    applyMoveTo(board, m);
-    return !isInCheck(board, color);
+    const undo = applyMoveTo(state.board, m);
+    const legal = !isInCheck(state.board, color);
+    undoMove(state.board, undo);
+    return legal;
   });
 }
 
