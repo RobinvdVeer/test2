@@ -1,0 +1,32 @@
+replicaCount: 1
+
+image:
+  web:
+    repository: ghcr.io/robinvdveer/test2-web
+    tag: latest
+    pullPolicy: IfNotPresent
+
+service:
+  web:
+    type: ClusterIP
+    port: 80
+    targetPort: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: really-bad-chess.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

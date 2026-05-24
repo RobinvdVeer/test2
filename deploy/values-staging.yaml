@@ -1,0 +1,8 @@
+replicaCount: 1
+
+image:
+  web:
+    pullPolicy: IfNotPresent
+
+ingress:
+  enabled: false

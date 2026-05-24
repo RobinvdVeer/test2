@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "really-bad-chess-web-app.fullname" . }}-web
+  labels:
+    {{- include "really-bad-chess-web-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  type: {{ .Values.service.web.type }}
+  ports:
+    - port: {{ .Values.service.web.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "really-bad-chess-web-app.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: web

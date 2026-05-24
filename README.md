@@ -7,12 +7,12 @@ A deliberately awful 90s-Geocities-inspired chess web app. You play White agains
 Serve the app over HTTP with Docker Compose:
 
 ```sh
-docker compose up
+docker compose up --build
 ```
 
 Then open <http://localhost:8080> in a browser.
 
-Docker Compose binds the demo server to localhost only and serves only the static files in `public/`. For production deployment, use a purpose-built web server or reverse proxy with appropriate access controls and TLS.
+Docker Compose builds the static nginx image declared in `docker-compose.yml` and binds the demo server to localhost only. Kubernetes deployment manifests live under `deploy/` for Helm-based releases.
 
 Do not open `public/index.html` directly with a `file://` URL. The app uses ES modules, and modern browsers block module imports from `file://` origins.
 

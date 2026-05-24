@@ -1,0 +1,6 @@
+apiVersion: v2
+name: really-bad-chess-web-app
+description: A static web deployment for Really Bad Chess
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
