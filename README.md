@@ -4,7 +4,13 @@ A deliberately awful 90s-Geocities-inspired chess web app. You play White agains
 
 ## Run
 
-Open `index.html` in a browser. No backend, build step, dependencies, or dignity required.
+Run it with Docker Compose, then open <http://localhost:8080/>:
+
+```sh
+docker compose up --build
+```
+
+For quick local development without Docker, serve the directory with any static file server (ES modules require HTTP rather than opening `index.html` directly).
 
 ## Check
 
@@ -12,7 +18,7 @@ Run `npm run check` to syntax-check the JavaScript modules.
 
 ## How to play
 
-1. Open `index.html`.
+1. Open <http://localhost:8080/>.
 2. Click one of your White pieces to select it.
 3. Click a highlighted destination square to move there.
 4. Wait briefly while the Black bot thinks very incorrectly and makes a move.

@@ -53,7 +53,7 @@ export function legalMovesFor(state, r, c) {
   });
 }
 
-function pseudoMovesFor(state, r, c) {
+export function pseudoMovesFor(state, r, c) {
   const p = pieceAt(state, r, c);
   const color = colorOf(p);
   if (!color) return [];

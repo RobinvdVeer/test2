@@ -1,4 +1,4 @@
-import { PIECES, allLegalMoves as engineAllLegalMoves, checkGameEnd, colorOf, createGameState, inCheck, legalMovesFor as engineLegalMovesFor, makeMove as engineMakeMove } from './chess-engine.js';
+import { PIECES, allLegalMoves as engineAllLegalMoves, checkGameEnd, colorOf, createGameState, inCheck, legalMovesFor as engineLegalMovesFor, makeMove as engineMakeMove, pseudoMovesFor as enginePseudoMovesFor } from './chess-engine.js';
 import { playBadNoise } from './audio.js';
 
 // Configuration knobs for maintainers who want to tune the badness without spelunking.
@@ -147,6 +147,7 @@ if (typeof window !== 'undefined') {
     botMove,
     allLegalMoves(color) { return engineAllLegalMoves(game, color); },
     legalMovesFor(r, c) { return engineLegalMovesFor(game, r, c); },
+    pseudoMovesFor(r, c) { return enginePseudoMovesFor(game, r, c); },
     makeMove(move) { return engineMakeMove(game, move); },
     checkGameEnd: showGameEndIfNeeded,
     inCheck(color) { return inCheck(game, color); },

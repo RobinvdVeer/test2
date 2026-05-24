@@ -1,7 +1,5 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
+import test from 'node:test';
+import assert from 'node:assert/strict';
 
 function createClassList(el) {
   const set = new Set();
@@ -21,7 +19,7 @@ class ElementStub {
     this.id = id;
     this.children = [];
     this.dataset = {};
-    this.style = { values: {}, setProperty: (k, v) => { this.style.values[k] = v; } };
+    this.style = { values: {}, setProperty: (k, v) => { this.style.values[k] = v; }, removeProperty: k => { delete this.style.values[k]; } };
     this.listeners = {};
     this.checked = false;
     this._innerHTML = '';
@@ -40,7 +38,9 @@ class ElementStub {
   click() { this.dispatchEvent({ type: 'click' }); }
 }
 
-function loadApp({ random = () => 0.99 } = {}) {
+let importCounter = 0;
+
+async function loadApp({ random = () => 0.99 } = {}) {
   const ids = {
     board: new ElementStub('div', 'board'),
     status: new ElementStub('div', 'status'),
@@ -56,19 +56,18 @@ function loadApp({ random = () => 0.99 } = {}) {
   };
   const math = Object.create(Math);
   math.random = random;
-  const context = {
+  const window = {
     document,
-    window: null,
     Math: math,
     setTimeout(fn, delay) { timers.push({ fn, delay }); return timers.length; },
     clearTimeout() {},
     AudioContext: function AudioContext() {},
     webkitAudioContext: function WebkitAudioContext() {}
   };
-  context.window = context;
-  vm.createContext(context);
-  vm.runInContext(fs.readFileSync('app.js', 'utf8'), context, { filename: 'app.js' });
-  return { api: context.window.__badChess, ids, timers, context };
+  Object.assign(globalThis, window, { window });
+  await import(`../app.js?test=${++importCounter}`);
+  const api = globalThis.window.__badChess;
+  return { api, ids, timers, context: window };
 }
 
 const empty = [
@@ -78,8 +77,8 @@ const empty = [
 const destinations = moves => JSON.parse(JSON.stringify(moves.map(m => `${m.to.r},${m.to.c}`).sort()));
 const hasMove = (moves, r, c, prop) => moves.some(m => m.to.r === r && m.to.c === c && (!prop || m[prop]));
 
-test('core move generator covers initial moves, piece movement, blocking, captures, and pinned pieces', () => {
-  const { api } = loadApp();
+test('core move generator covers initial moves, piece movement, blocking, captures, and pinned pieces', async () => {
+  const { api } = await loadApp();
 
   assert.equal(api.allLegalMoves('w').length, 20);
   assert.equal(api.allLegalMoves('b').length, 20);
@@ -132,8 +131,8 @@ test('core move generator covers initial moves, piece movement, blocking, captur
   assert.equal(api.legalMovesFor(4, 4).length, 0, 'bishop pinned to king must not be allowed to expose check');
 });
 
-test('special rules: promotion, en passant, castling, castling restrictions, and castling rights', () => {
-  const { api } = loadApp();
+test('special rules: promotion, en passant, castling, castling restrictions, and castling rights', async () => {
+  const { api } = await loadApp();
 
   api.setState({ board: ['....k...', 'P.......', '........', '........', '........', '........', '.......p', '....K...'], turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
   let whitePromotion = api.legalMovesFor(1, 0).find(m => m.to.r === 0 && m.to.c === 0);
@@ -175,9 +174,9 @@ test('special rules: promotion, en passant, castling, castling restrictions, and
   assert.equal(api.getState().castling.k, false, 'capturing rook revokes opponent castling right');
 });
 
-test('bot turn is deterministic under fake timers/random and only makes legal moves', () => {
+test('bot turn is deterministic under fake timers/random and only makes legal moves', async () => {
   const randomValues = [0.99, 0.99, 0.99, 0.99, 0.99, 0.99, 0, 0];
-  const { api, ids, timers } = loadApp({ random: () => randomValues.shift() ?? 0.99 });
+  const { api, ids, timers } = await loadApp({ random: () => randomValues.shift() ?? 0.99 });
   ids.chaos.checked = false;
   api.render();
   ids.board.children.find(sq => sq.dataset.r === 6 && sq.dataset.c === 4).click();
@@ -199,8 +198,8 @@ test('bot turn is deterministic under fake timers/random and only makes legal mo
   assert.equal(api.getState().board.map(r => r.join('')).join('/'), locked);
 });
 
-test('checkmate and stalemate set game over and block further clicks', () => {
-  const { api, ids } = loadApp();
+test('checkmate and stalemate set game over and block further clicks', async () => {
+  const { api, ids } = await loadApp();
   ids.chaos.checked = false;
 
   api.setState({ board: ['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
@@ -217,9 +216,9 @@ test('checkmate and stalemate set game over and block further clicks', () => {
   assert.match(ids.status.textContent, /Stalemate/);
 });
 
-test('rendering and click-selection UI behavior is covered, including chaos glitches', () => {
+test('rendering and click-selection UI behavior is covered, including chaos glitches', async () => {
   const randomValues = [0.01, 0.99, 0.99, 0.99, 0.99, 0.99];
-  const { api, ids } = loadApp({ random: () => randomValues.shift() ?? 0.99 });
+  const { api, ids } = await loadApp({ random: () => randomValues.shift() ?? 0.99 });
   assert.equal(ids.board.children.length, 64);
   assert.match(ids.board.children[0].innerHTML, /♜/);
   assert.ok(ids.board.children.some(sq => sq.classList.contains('glitch')));
