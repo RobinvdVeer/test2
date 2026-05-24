@@ -1,4 +1,4 @@
-import { PIECES, checkGameEnd, colorOf, createGameState, inCheck, legalMovesFor, makeMove } from './chess-engine.js';
+import { PIECES, allLegalMoves as engineAllLegalMoves, checkGameEnd, colorOf, createGameState, inCheck, legalMovesFor as engineLegalMovesFor, makeMove as engineMakeMove } from './chess-engine.js';
 import { makeBadBotMove } from './bot.js';
 import { playBadNoise } from './audio.js';
 
@@ -9,6 +9,21 @@ let legalForSelected = [];
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
 const chaosEl = document.getElementById('chaos');
+const squareEls = [];
+
+function initBoardDom() {
+  for (let r = 0; r < 8; r++) {
+    squareEls[r] = [];
+    for (let c = 0; c < 8; c++) {
+      const sq = document.createElement('button');
+      sq.dataset.r = r;
+      sq.dataset.c = c;
+      sq.addEventListener('click', onSquareClick);
+      squareEls[r][c] = sq;
+      boardEl.appendChild(sq);
+    }
+  }
+}
 
 function newGame() {
   game = createGameState();
@@ -19,20 +34,22 @@ function newGame() {
 }
 
 function render() {
-  boardEl.innerHTML = '';
   const legalKeys = new Set(legalForSelected.map(m => `${m.to.r},${m.to.c}`));
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
-      const sq = document.createElement('button');
+      const sq = squareEls[r][c];
       sq.className = `square ${(r + c) % 2 ? 'dark' : 'light'}`;
+      sq.style.removeProperty('--x');
+      sq.style.removeProperty('--y');
+      sq.style.removeProperty('--r');
       if (selected && selected.r === r && selected.c === c) sq.classList.add('selected');
       if (legalKeys.has(`${r},${c}`)) sq.classList.add('legal');
       maybeAddGlitch(sq);
-      sq.dataset.r = r;
-      sq.dataset.c = c;
-      sq.innerHTML = pieceHtml(game.board[r][c]);
-      sq.addEventListener('click', onSquareClick);
-      boardEl.appendChild(sq);
+      const piece = game.board[r][c];
+      if (sq.dataset.piece !== piece) {
+        sq.dataset.piece = piece;
+        sq.innerHTML = pieceHtml(piece);
+      }
     }
   }
 }
@@ -51,14 +68,15 @@ function pieceHtml(piece) {
 
 function onSquareClick(e) {
   if (game.gameOver || game.turn !== 'w') return;
-  const r = +e.currentTarget.dataset.r;
-  const c = +e.currentTarget.dataset.c;
+  const sq = e.currentTarget || e;
+  const r = +sq.dataset.r;
+  const c = +sq.dataset.c;
   const p = game.board[r][c];
 
   if (selected) {
     const move = legalForSelected.find(m => m.to.r === r && m.to.c === c);
     if (move) {
-      makeMove(game, move);
+      engineMakeMove(game, move);
       selected = null;
       legalForSelected = [];
       afterPlayerMove();
@@ -68,7 +86,7 @@ function onSquareClick(e) {
 
   if (colorOf(p) === 'w') {
     selected = { r, c };
-    legalForSelected = legalMovesFor(game, r, c);
+    legalForSelected = engineLegalMovesFor(game, r, c);
     setStatus(`${PIECES[p]} selected. ${legalForSelected.length || 'Zero'} legal moves, which is probably your fault.`);
   } else {
     selected = null;
@@ -104,49 +122,46 @@ function showGameEndIfNeeded() {
 
 function setStatus(s) { statusEl.textContent = s; }
 
-document.getElementById('newGame').addEventListener('click', newGame);
-document.getElementById('noiseBtn').addEventListener('click', playBadNoise);
-chaosEl.addEventListener('change', render);
+function cloneBoard() { return game.board.map(row => row.slice()); }
 
 if (typeof window !== 'undefined') {
   window.__badChess = {
     newGame,
     render,
     onSquareClick,
-    afterMove,
+    afterMove: afterPlayerMove,
     botMove,
-    allLegalMoves,
-    legalMovesFor,
-    pseudoMovesFor,
-    makeMove,
-    applyMoveTo,
-    checkGameEnd,
-    inCheck,
-    isInCheck,
-    squareAttacked,
-    attacksSquare,
+    allLegalMoves(color) { return engineAllLegalMoves(game, color); },
+    legalMovesFor(r, c) { return engineLegalMovesFor(game, r, c); },
+    makeMove(move) { return engineMakeMove(game, move); },
+    checkGameEnd: showGameEndIfNeeded,
+    inCheck(color) { return inCheck(game, color); },
     colorOf,
     setState(next = {}) {
-      if (next.board) board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
-      if ('turn' in next) turn = next.turn;
+      if (next.board) game.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
+      if ('turn' in next) game.turn = next.turn;
       if ('selected' in next) selected = next.selected;
       if ('legalForSelected' in next) legalForSelected = next.legalForSelected;
-      if ('enPassant' in next) enPassant = next.enPassant;
-      if ('castling' in next) castling = { ...next.castling };
-      if ('gameOver' in next) gameOver = next.gameOver;
+      if ('enPassant' in next) game.enPassant = next.enPassant;
+      if ('castling' in next) game.castling = { ...next.castling };
+      if ('gameOver' in next) game.gameOver = next.gameOver;
     },
     getState() {
       return {
-        board: clone(),
-        turn,
+        board: cloneBoard(),
+        turn: game.turn,
         selected,
         legalForSelected: legalForSelected.slice(),
-        enPassant,
-        castling: { ...castling },
-        gameOver
+        enPassant: game.enPassant,
+        castling: { ...game.castling },
+        gameOver: game.gameOver
       };
     }
   };
 }
 
+document.getElementById('newGame').addEventListener('click', newGame);
+document.getElementById('noiseBtn').addEventListener('click', playBadNoise);
+chaosEl.addEventListener('change', render);
+initBoardDom();
 newGame();
