@@ -125,7 +125,7 @@ export function createGameController({ view, random = Math.random, setTimeoutFn 
       selectSquare,
       afterMove: afterPlayerMove,
       botMove,
-      checkGameEnd() { return showGameEndIfNeeded(); },
+      checkGameEnd() { return showGameEndIfNeeded().over; },
       inCheck(color) { return inCheck(game, color); },
       colorOf,
       setState,
