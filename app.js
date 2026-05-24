@@ -106,14 +106,15 @@ function onSquareClick(e) {
 function afterPlayerMove() {
   game.turn = 'b';
   render();
-  if (showGameEndIfNeeded()) return;
+  const gameEnd = showGameEndIfNeeded();
+  if (gameEnd.over) return;
   setStatus('Bot thinking very incorrectly...');
-  setTimeout(botMove, randomDelay(BOT_MIN_DELAY_MS, BOT_MAX_DELAY_MS));
+  setTimeout(() => botMove(gameEnd.moves), randomDelay(BOT_MIN_DELAY_MS, BOT_MAX_DELAY_MS));
 }
 
-function botMove() {
+function botMove(cachedMoves = null) {
   if (game.gameOver) return;
-  const moves = engineAllLegalMoves(game, 'b');
+  const moves = cachedMoves || engineAllLegalMoves(game, 'b');
   if (!moves.length) return showGameEndIfNeeded();
   // Bad bot: heavily prefers random pawn moves, otherwise random chaos.
   const pawnMoves = moves.filter(m => game.board[m.from.r][m.from.c].toLowerCase() === 'p');
@@ -121,15 +122,15 @@ function botMove() {
   engineMakeMove(game, pool[Math.floor(Math.random() * pool.length)]);
   game.turn = 'w';
   render();
-  if (!showGameEndIfNeeded()) setStatus(inCheck(game, 'w') ? 'CHECK! The bot did that by accident.' : 'Your move. The bot regrets nothing.');
+  if (!showGameEndIfNeeded().over) setStatus(inCheck(game, 'w') ? 'CHECK! The bot did that by accident.' : 'Your move. The bot regrets nothing.');
 }
 
 function showGameEndIfNeeded() {
   const result = checkGameEnd(game);
-  if (!result.over) return false;
+  if (!result.over) return result;
   const side = result.color === 'w' ? 'White' : 'Black';
   setStatus(result.checkmate ? `${side} is checkmated. Incredible and upsetting.` : 'Stalemate. Nobody wins, especially chess.');
-  return true;
+  return result;
 }
 
 function setStatus(s) { statusEl.textContent = s; }
@@ -148,7 +149,7 @@ if (typeof window !== 'undefined') {
     allLegalMoves(color) { return engineAllLegalMoves(game, color); },
     legalMovesFor(r, c) { return engineLegalMovesFor(game, r, c); },
     makeMove(move) { return engineMakeMove(game, move); },
-    checkGameEnd: showGameEndIfNeeded,
+    checkGameEnd() { return showGameEndIfNeeded().over; },
     inCheck(color) { return inCheck(game, color); },
     colorOf,
     setState(next = {}) {
