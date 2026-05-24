@@ -1,8 +1,3 @@
-export const PIECES = {
-  K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙',
-  k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟'
-};
-
 const START = [
   'rnbqkbnr', 'pppppppp', '........', '........',
   '........', '........', 'PPPPPPPP', 'RNBQKBNR'
@@ -53,7 +48,7 @@ export function legalMovesFor(state, r, c) {
   });
 }
 
-function pseudoMovesFor(state, r, c) {
+export function pseudoMovesFor(state, r, c) {
   const p = pieceAt(state, r, c);
   const color = colorOf(p);
   if (!color) return [];
@@ -206,9 +201,14 @@ function attacksSquare(board, r, c, tr, tc) {
   return false;
 }
 
-export function checkGameEnd(state) {
+export function getGameEnd(state) {
   const moves = allLegalMoves(state, state.turn);
   if (moves.length) return { over: false };
-  state.gameOver = true;
   return { over: true, checkmate: inCheck(state, state.turn), color: state.turn };
+}
+
+export function markGameOverIfNeeded(state) {
+  const result = getGameEnd(state);
+  if (result.over) state.gameOver = true;
+  return result;
 }
