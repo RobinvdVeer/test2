@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "scripts": {
+    "check": "node --check app.js && node --check chess-engine.js && node --check bot.js && node --check audio.js"
+  }
+}

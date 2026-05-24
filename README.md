@@ -6,6 +6,10 @@ A deliberately awful 90s-Geocities-inspired chess web app. You play White agains
 
 Open `index.html` in a browser. No backend, build step, dependencies, or dignity required.
 
+## Check
+
+Run `npm run check` to syntax-check the JavaScript modules.
+
 ## Features
 
 - Legal chess moves, including check prevention, castling, en passant, and queen promotion
