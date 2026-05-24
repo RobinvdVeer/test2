@@ -48,8 +48,7 @@ Run `npm test` to execute the Node.js test suite.
 ## Source layout
 
 - `public/` is the browser app served by Docker Compose. Browser imports in `public/app.js` must resolve inside this directory.
-- Root-level JavaScript files exist for the Node test harness and mirror the browser modules where needed.
-- Documentation examples use `public/` paths for browser code and root paths only when demonstrating Node test/helper usage.
+- Documentation examples use `public/` paths for browser code.
 
 ## API surface
 

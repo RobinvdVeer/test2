@@ -1,14 +1,9 @@
-import { allLegalMoves, colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove, pseudoMovesFor } from './chess-engine.js';
+import { colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove } from './chess-engine.js';
 import { makeBadBotMove } from './bot.js';
+import { attachGameControllerDebugApi } from './game-controller-debug.js';
 import { PIECES } from './piece-symbols.js';
 
-export const DEBUG_API = Symbol('BadChess.debugApi');
-
-export function getGameControllerDebugApi(controller) {
-  return controller[DEBUG_API];
-}
-
-export function createGameController({ view, random = Math.random, setTimeoutFn = setTimeout, chaosEnabled = () => false, config = {} }) {
+export function createGameController({ view, random = Math.random, setTimeoutFn = setTimeout, chaosEnabled = () => false, config = {}, debug = false }) {
   const pawnMoveBias = config.pawnMoveBias ?? config.botPawnMoveBias ?? 0.7;
   const botMinDelayMs = config.botMinDelayMs ?? 550;
   const botMaxDelayMs = config.botMaxDelayMs ?? 1250;
@@ -90,52 +85,24 @@ export function createGameController({ view, random = Math.random, setTimeoutFn 
     return min + random() * (max - min);
   }
 
-  function setState(next = {}) {
-    if (next.board) game.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
-    if ('turn' in next) game.turn = next.turn;
-    if ('selected' in next) selected = next.selected;
-    if ('legalForSelected' in next) legalForSelected = next.legalForSelected;
-    if ('enPassant' in next) game.enPassant = next.enPassant;
-    if ('castling' in next) game.castling = { ...next.castling };
-    if ('gameOver' in next) game.gameOver = next.gameOver;
-  }
-
-  function getState() {
-    return {
-      board: game.board.map(row => row.slice()),
-      turn: game.turn,
-      selected,
-      legalForSelected: legalForSelected.slice(),
-      enPassant: game.enPassant,
-      castling: { ...game.castling },
-      gameOver: game.gameOver
-    };
-  }
-
   const controller = {
     newGame,
     selectSquare,
     render
   };
 
-  Object.defineProperty(controller, DEBUG_API, {
-    value: {
-      newGame,
-      render,
-      selectSquare,
-      afterMove: afterPlayerMove,
+  if (debug) {
+    attachGameControllerDebugApi(controller, {
+      getGame: () => game,
+      getSelected: () => selected,
+      setSelected: value => { selected = value; },
+      getLegalForSelected: () => legalForSelected,
+      setLegalForSelected: value => { legalForSelected = value; },
+      afterPlayerMove,
       botMove,
-      checkGameEnd() { return showGameEndIfNeeded().over; },
-      inCheck(color) { return inCheck(game, color); },
-      colorOf,
-      setState,
-      getState,
-      allLegalMoves(color) { return allLegalMoves(game, color); },
-      legalMovesFor(r, c) { return legalMovesFor(game, r, c); },
-      pseudoMovesFor(r, c) { return pseudoMovesFor(game, r, c); },
-      makeMove(move) { return makeMove(game, move); }
-    }
-  });
+      showGameEndIfNeeded
+    });
+  }
 
   return controller;
 }

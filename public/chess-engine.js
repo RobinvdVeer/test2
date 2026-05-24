@@ -147,35 +147,11 @@ export function makeMove(state, move) {
 
 function applyMoveTo(board, move) {
   const p = board[move.from.r][move.from.c];
-  const undo = {
-    move,
-    fromPiece: p,
-    toPiece: board[move.to.r][move.to.c],
-    enPassantPiece: move.enPassant ? board[move.from.r][move.to.c] : null,
-    castleRook: move.castle ? {
-      fromC: move.castle === 'k' ? 7 : 0,
-      toC: move.castle === 'k' ? 5 : 3,
-      fromPiece: board[move.to.r][move.castle === 'k' ? 7 : 0],
-      toPiece: board[move.to.r][move.castle === 'k' ? 5 : 3]
-    } : null
-  };
   board[move.from.r][move.from.c] = '.';
   if (move.enPassant) board[move.from.r][move.to.c] = '.';
   board[move.to.r][move.to.c] = move.promotion || p;
   if (move.castle === 'k') { board[move.to.r][5] = board[move.to.r][7]; board[move.to.r][7] = '.'; }
   if (move.castle === 'q') { board[move.to.r][3] = board[move.to.r][0]; board[move.to.r][0] = '.'; }
-  return undo;
-}
-
-function undoMove(board, undo) {
-  const { move } = undo;
-  if (undo.castleRook) {
-    board[move.to.r][undo.castleRook.fromC] = undo.castleRook.fromPiece;
-    board[move.to.r][undo.castleRook.toC] = undo.castleRook.toPiece;
-  }
-  board[move.from.r][move.from.c] = undo.fromPiece;
-  board[move.to.r][move.to.c] = undo.toPiece;
-  if (move.enPassant) board[move.from.r][move.to.c] = undo.enPassantPiece;
 }
 
 function updateCastlingRights(castling, move, p) {
