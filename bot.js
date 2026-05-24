@@ -1,4 +1,4 @@
-import { allLegalMoves, makeMove } from './chess-engine.js';
+import { allLegalMoves, makeMove } from './public/chess-engine.js';
 
 export function makeBadBotMove(state) {
   const moves = allLegalMoves(state, 'b');

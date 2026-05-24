@@ -12,7 +12,9 @@ docker compose up
 
 Then open <http://localhost:8080> in a browser.
 
-Do not open `index.html` directly with a `file://` URL. The app uses ES modules, and modern browsers block module imports from `file://` origins.
+Docker Compose binds the demo server to localhost only and serves only the static files in `public/`. For production deployment, use a purpose-built web server or reverse proxy with appropriate access controls and TLS.
+
+Do not open `public/index.html` directly with a `file://` URL. The app uses ES modules, and modern browsers block module imports from `file://` origins.
 
 ## Check
 
@@ -20,7 +22,7 @@ Run `npm run check` to syntax-check the JavaScript modules.
 
 ## How to play
 
-1. Open `index.html`.
+1. Open <http://localhost:8080>.
 2. Click one of your White pieces to select it.
 3. Click a highlighted destination square to move there.
 4. Wait briefly while the Black bot thinks very incorrectly and makes a move.
@@ -40,7 +42,7 @@ Run `npm run check` to syntax-check the JavaScript modules.
 
 ## Configuration
 
-Maintainers can tune the badness in `app.js` using the named constants near the top of the file:
+Maintainers can tune the badness in `public/app.js` using the named constants near the top of the file:
 
 - `GLITCH_PROBABILITY`, `GLITCH_MAX_OFFSET_PX`, and `GLITCH_MAX_ROTATION_DEG` control random layout glitches.
 - `BOT_PAWN_MOVE_BIAS`, `BOT_MIN_DELAY_MS`, and `BOT_MAX_DELAY_MS` control the bot's pawn preference and thinking delay.
