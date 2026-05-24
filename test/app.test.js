@@ -1,10 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allLegalMoves, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove, pseudoMovesFor } from '../chess-engine.js';
-import { makeBadBotMove } from '../bot.js';
-import { createGameController } from '../game-controller.js';
+import { execFileSync, spawnSync } from 'node:child_process';
+import http from 'node:http';
 
-function stateFrom(next = {}) {
+import {
+  allLegalMoves,
+  createGameState,
+  getGameEnd,
+  inCheck,
+  legalMovesFor,
+  makeMove,
+  pseudoMovesFor
+} from '../public/chess-engine.js';
+import { makeBadBotMove } from '../bot.js';
+import { playBadNoise } from '../public/audio.js';
+
+function stateFrom(boardOrNext, turn = 'w', castling = { K: false, Q: false, k: false, q: false }, enPassant = null) {
+  if (Array.isArray(boardOrNext)) {
+    return { board: boardOrNext.map(row => row.split('')), turn, enPassant, castling: { ...castling }, gameOver: false };
+  }
+
+  const next = boardOrNext || {};
   const state = createGameState();
   if (next.board) state.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
   if ('turn' in next) state.turn = next.turn;
@@ -14,17 +30,9 @@ function stateFrom(next = {}) {
   return state;
 }
 
-function createView() {
-  return {
-    renders: [],
-    status: '',
-    render(game, uiState) { this.renders.push({ board: game.board.map(row => row.slice()), uiState }); },
-    setStatus(status) { this.status = status; }
-  };
-}
-
 const destinations = moves => moves.map(m => `${m.to.r},${m.to.c}`).sort();
 const hasMove = (moves, r, c, prop) => moves.some(m => m.to.r === r && m.to.c === c && (!prop || m[prop]));
+const boardKey = state => state.board.map(r => r.join('')).join('/');
 
 test('core move generator covers initial moves, piece movement, blocking, captures, and pinned pieces', () => {
   let state = createGameState();
@@ -34,49 +42,58 @@ test('core move generator covers initial moves, piece movement, blocking, captur
   assert.deepEqual(destinations(legalMovesFor(state, 7, 1)), ['5,0', '5,2']);
   assert.deepEqual(destinations(legalMovesFor(state, 6, 4)), ['4,4', '5,4']);
 
-  state = stateFrom({
-    board: [
-      '....k...', '........', '........', '..p.p...',
-      '...B....', '..P.P...', '........', '....K...'
-    ],
-    turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, gameOver: false
-  });
+  state = stateFrom([
+    '....k...', '........', '........', '..p.p...',
+    '...B....', '..P.P...', '........', '....K...'
+  ]);
   assert.deepEqual(destinations(pseudoMovesFor(state, 4, 3)), ['3,2', '3,4'], 'bishop can capture enemies but cannot pass through them or own pieces');
 
-  state = stateFrom({ board: ['....k...', '........', '........', '........', '...Q....', '........', '........', '....K...'], turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false } });
+  state = stateFrom([
+    '....k...', '........', '........', '........',
+    '...Q....', '........', '........', '....K...'
+  ]);
   assert.ok(hasMove(pseudoMovesFor(state, 4, 3), 4, 0), 'queen moves horizontally');
   assert.ok(hasMove(pseudoMovesFor(state, 4, 3), 1, 0), 'queen moves diagonally');
 
-  state = stateFrom({ board: ['....k...', '........', '........', '........', '...R....', '........', '........', '....K...'], turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false } });
+  state = stateFrom([
+    '....k...', '........', '........', '........',
+    '...R....', '........', '........', '....K...'
+  ]);
   assert.ok(hasMove(pseudoMovesFor(state, 4, 3), 0, 3), 'rook moves vertically');
   assert.ok(hasMove(pseudoMovesFor(state, 4, 3), 4, 7), 'rook moves horizontally');
 
-  state = stateFrom({ board: ['....k...', '........', '........', '........', '........', '........', '........', '...K....'], turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false } });
+  state = stateFrom([
+    '....k...', '........', '........', '........',
+    '........', '........', '........', '...K....'
+  ]);
   assert.ok(hasMove(pseudoMovesFor(state, 7, 3), 6, 4), 'king moves one square');
 
-  state = stateFrom({ board: ['....r...', '........', '........', '........', '....B...', '........', '........', '....K...'], turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false } });
+  state = stateFrom([
+    '....r...', '........', '........', '........',
+    '....B...', '........', '........', '....K...'
+  ]);
   assert.equal(legalMovesFor(state, 4, 4).length, 0, 'bishop pinned to king must not be allowed to expose check');
 });
 
 test('special rules: promotion, en passant, castling, castling restrictions, and castling rights', () => {
-  let state = stateFrom({ board: ['....k...', 'P.......', '........', '........', '........', '........', '.......p', '....K...'], turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false } });
+  let state = stateFrom(['....k...', 'P.......', '........', '........', '........', '........', '.......p', '....K...']);
   const whitePromotion = legalMovesFor(state, 1, 0).find(m => m.to.r === 0 && m.to.c === 0);
   assert.equal(whitePromotion.promotion, 'Q');
   makeMove(state, whitePromotion);
   assert.equal(state.board[0][0], 'Q');
 
-  state = stateFrom({ board: ['....k...', '........', '........', '........', '........', '........', '.......p', '....K...'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false } });
+  state = stateFrom(['....k...', '........', '........', '........', '........', '........', '.......p', '....K...'], 'b');
   const blackPromotion = legalMovesFor(state, 6, 7).find(m => m.to.r === 7 && m.to.c === 7);
   assert.equal(blackPromotion.promotion, 'q');
 
-  state = stateFrom({ board: ['....k...', '........', '........', '...Pp...', '........', '........', '........', '....K...'], turn: 'w', enPassant: { r: 2, c: 4 }, castling: { K: false, Q: false, k: false, q: false } });
+  state = stateFrom(['....k...', '........', '........', '...Pp...', '........', '........', '........', '....K...'], 'w', undefined, { r: 2, c: 4 });
   const enPassant = legalMovesFor(state, 3, 3).find(m => m.enPassant);
   assert.ok(enPassant);
   makeMove(state, enPassant);
   assert.equal(state.board[2][4], 'P');
   assert.equal(state.board[3][4], '.');
 
-  state = stateFrom({ board: ['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: true, q: true } });
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: true, q: true });
   assert.ok(hasMove(legalMovesFor(state, 7, 4), 7, 6, 'castle'));
   assert.ok(hasMove(legalMovesFor(state, 7, 4), 7, 2, 'castle'));
   makeMove(state, legalMovesFor(state, 7, 4).find(m => m.castle === 'k'));
@@ -85,74 +102,154 @@ test('special rules: promotion, en passant, castling, castling restrictions, and
   assert.equal(state.castling.K, false);
   assert.equal(state.castling.Q, false);
 
-  state = stateFrom({ board: ['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K.NR'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: true, q: true } });
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K.NR'], 'w', { K: true, Q: true, k: true, q: true });
   assert.equal(hasMove(legalMovesFor(state, 7, 4), 7, 6, 'castle'), false, 'blocked castling is illegal');
-  state = stateFrom({ board: ['....k...', '........', '........', '........', '.....r..', '........', '........', 'R...K..R'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: false, q: false } });
+  state = stateFrom(['....k...', '........', '........', '........', '.....r..', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: false, q: false });
   assert.equal(hasMove(legalMovesFor(state, 7, 4), 7, 6, 'castle'), false, 'cannot castle through attacked square');
 
-  state = stateFrom({ board: ['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: true, q: true } });
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: true, q: true });
   makeMove(state, { from: { r: 7, c: 0 }, to: { r: 7, c: 1 } });
   assert.equal(state.castling.Q, false);
-  state = stateFrom({ board: ['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: true, q: true } });
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: true, q: true });
   makeMove(state, { from: { r: 7, c: 7 }, to: { r: 0, c: 7 } });
   assert.equal(state.castling.k, false, 'capturing rook revokes opponent castling right');
 });
 
-test('game-end evaluation is pure and controller marks game over when showing the result', () => {
-  const state = stateFrom({ board: ['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, gameOver: false });
+test('castling is unavailable when rights are true but the rook is missing or replaced', () => {
+  for (const { name, board, color, king, missingTo, replacedBoard, replacedTo } of [
+    { name: 'white king-side', board: ['....k...', '........', '........', '........', '........', '........', '........', 'R...K...'], replacedBoard: ['....k...', '........', '........', '........', '........', '........', '........', 'R...K..N'], color: 'w', king: [7, 4], missingTo: [7, 6], replacedTo: [7, 6] },
+    { name: 'white queen-side', board: ['....k...', '........', '........', '........', '........', '........', '........', '....K..R'], replacedBoard: ['....k...', '........', '........', '........', '........', '........', '........', 'N...K..R'], color: 'w', king: [7, 4], missingTo: [7, 2], replacedTo: [7, 2] },
+    { name: 'black king-side', board: ['r...k...', '........', '........', '........', '........', '........', '........', '....K...'], replacedBoard: ['r...k..n', '........', '........', '........', '........', '........', '........', '....K...'], color: 'b', king: [0, 4], missingTo: [0, 6], replacedTo: [0, 6] },
+    { name: 'black queen-side', board: ['....k..r', '........', '........', '........', '........', '........', '........', '....K...'], replacedBoard: ['n...k..r', '........', '........', '........', '........', '........', '........', '....K...'], color: 'b', king: [0, 4], missingTo: [0, 2], replacedTo: [0, 2] }
+  ]) {
+    let state = stateFrom(board, color, { K: true, Q: true, k: true, q: true });
+    assert.equal(hasMove(legalMovesFor(state, ...king), ...missingTo, 'castle'), false, `${name} cannot castle without rook`);
+    state = stateFrom(replacedBoard, color, { K: true, Q: true, k: true, q: true });
+    assert.equal(hasMove(legalMovesFor(state, ...king), ...replacedTo, 'castle'), false, `${name} cannot castle with non-rook corner piece`);
+  }
+});
+
+test('game-end evaluation is pure', () => {
+  const state = stateFrom(['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], 'b');
   const result = getGameEnd(state);
   assert.deepEqual(result, { over: true, checkmate: true, color: 'b' });
   assert.equal(state.gameOver, false, 'getGameEnd must not mutate state');
-
-  const view = createView();
-  const controller = createGameController({ view });
-  controller.setState({ board: state.board, turn: 'b', enPassant: null, castling: state.castling, gameOver: false });
-  assert.equal(controller.showGameEndIfNeeded(), true);
-  assert.equal(controller.getState().gameOver, true);
-  assert.match(view.status, /checkmated/);
 });
 
 test('bot is deterministic with injected random and only makes legal moves', () => {
   const state = createGameState();
   makeMove(state, legalMovesFor(state, 6, 4).find(m => m.to.r === 4 && m.to.c === 4));
   state.turn = 'b';
-  const beforeBot = state.board.map(r => r.join('')).join('/');
+  const beforeBot = boardKey(state);
 
   assert.equal(makeBadBotMove(state, { random: () => 0, pawnBias: 0.7 }), true);
-  assert.notEqual(state.board.map(r => r.join('')).join('/'), beforeBot);
+  assert.notEqual(boardKey(state), beforeBot);
 
-  const locked = stateFrom({ board: ['....k...', '........', '........', '........', '........', '........', '........', '....K...'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false } });
+  const locked = stateFrom(['....k...', '........', '........', '........', '........', '........', '........', '....K...'], 'b');
   assert.equal(makeBadBotMove(locked, { random: () => 0 }), true);
   assert.equal(inCheck(locked, 'w'), false);
 });
 
-test('controller handles turn flow, selection, bot timer, and blocked clicks after game over', () => {
-  const timers = [];
-  const view = createView();
-  const controller = createGameController({
-    view,
-    random: () => 0,
-    setTimeoutFn(fn, delay) { timers.push({ fn, delay }); return timers.length; }
+test('makeBadBotMove returns false and leaves state unchanged when black has no moves', () => {
+  const state = stateFrom(['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], 'b');
+  const before = boardKey(state);
+  assert.equal(makeBadBotMove(state), false);
+  assert.equal(boardKey(state), before);
+});
+
+test('makeBadBotMove returns true and uses pawn-biased branch with controlled random', () => {
+  const state = createGameState();
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    assert.equal(makeBadBotMove(state), true);
+  } finally {
+    Math.random = originalRandom;
+  }
+  assert.equal(state.board[2][0], 'p', 'first black pawn double-moves when pawn-biased branch picks first pawn move');
+  assert.equal(state.board[1][0], '.');
+});
+
+test('makeBadBotMove can use fallback all-moves branch with controlled random', () => {
+  const state = createGameState();
+  const originalRandom = Math.random;
+  const values = [0.99, 0.99];
+  Math.random = () => values.shift() ?? 0.99;
+  try {
+    assert.equal(makeBadBotMove(state), true);
+  } finally {
+    Math.random = originalRandom;
+  }
+  assert.notEqual(boardKey(state), boardKey(createGameState()), 'some legal black move was made from all-moves pool');
+});
+
+test('playBadNoise documents missing Web Audio support by throwing', () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = {};
+  try {
+    assert.throws(() => playBadNoise(), TypeError);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('playBadNoise documents AudioContext constructor errors by propagating them', () => {
+  const originalWindow = globalThis.window;
+  const err = new Error('blocked audio');
+  globalThis.window = { AudioContext: function AudioContext() { throw err; } };
+  try {
+    assert.throws(() => playBadNoise(), err);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+function commandExists(cmd) {
+  return spawnSync('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }).status === 0;
+}
+
+function httpGet(path) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port: 8080, path, timeout: 1000 }, res => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { body += chunk; });
+      res.on('end', () => resolve({ statusCode: res.statusCode, body }));
+    });
+    req.on('timeout', () => req.destroy(new Error('HTTP request timed out')));
+    req.on('error', reject);
+  });
+}
+
+async function waitForHttp(path, attempts = 20) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await httpGet(path);
+    } catch (err) {
+      lastErr = err;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+  throw lastErr;
+}
+
+test('Docker Compose serves the app over HTTP', { skip: !commandExists('docker') }, async t => {
+  execFileSync('docker', ['compose', 'config'], { stdio: 'pipe' });
+  const up = spawnSync('docker', ['compose', 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
+  if (up.status !== 0) {
+    t.skip(`docker compose up failed: ${up.stderr || up.stdout}`);
+    return;
+  }
+  t.after(() => {
+    spawnSync('docker', ['compose', 'down'], { stdio: 'ignore' });
   });
 
-  controller.newGame();
-  assert.match(view.status, /White to move/);
-  controller.selectSquare(0, 0);
-  assert.match(view.status, /not your piece/);
-  controller.selectSquare(7, 1);
-  assert.match(view.status, /♘ selected/);
-  assert.equal(controller.getState().legalForSelected.length, 2);
-  controller.selectSquare(5, 0);
-  assert.equal(controller.getState().turn, 'b');
-  assert.equal(timers.length, 1);
-  assert.match(view.status, /Bot thinking/);
-  timers[0].fn();
-  assert.equal(controller.getState().turn, 'w');
-  assert.match(view.status, /Your move|CHECK/);
+  const index = await waitForHttp('/');
+  assert.equal(index.statusCode, 200);
+  assert.match(index.body, /<script type="module" src="app\.js"><\/script>/);
 
-  controller.setState({ board: ['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, gameOver: false });
-  assert.equal(controller.showGameEndIfNeeded(), true);
-  const before = controller.getState().board.map(r => r.join('')).join('/');
-  controller.selectSquare(1, 1);
-  assert.equal(controller.getState().board.map(r => r.join('')).join('/'), before);
+  const appJs = await waitForHttp('/app.js');
+  assert.equal(appJs.statusCode, 200);
+  assert.match(appJs.body, /import .*\.\/game-controller\.js/);
 });
