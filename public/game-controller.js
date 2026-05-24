@@ -3,7 +3,7 @@ import { makeBadBotMove } from './bot.js';
 import { PIECES } from './piece-symbols.js';
 
 export function createGameController({ view, random = Math.random, setTimeoutFn = setTimeout, config = {} }) {
-  const botPawnMoveBias = config.botPawnMoveBias ?? 0.7;
+  const pawnMoveBias = config.pawnMoveBias ?? config.botPawnMoveBias ?? 0.7;
   const botMinDelayMs = config.botMinDelayMs ?? 550;
   const botMaxDelayMs = config.botMaxDelayMs ?? 1250;
 
@@ -56,7 +56,7 @@ export function createGameController({ view, random = Math.random, setTimeoutFn 
 
   function botMove() {
     if (game.gameOver) return;
-    if (!makeBadBotMove(game, { pawnBias: botPawnMoveBias, random })) return showGameEndIfNeeded();
+    if (!makeBadBotMove(game, { pawnMoveBias, random })) return showGameEndIfNeeded();
     game.turn = 'w';
     render();
     if (!showGameEndIfNeeded()) setStatus(inCheck(game, 'w') ? 'CHECK! The bot did that by accident.' : 'Your move. The bot regrets nothing.');
