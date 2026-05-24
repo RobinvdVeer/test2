@@ -31,7 +31,7 @@ controller = createGameController({
   view,
   chaosEnabled: () => chaosEl.checked,
   config: {
-    botPawnMoveBias: BOT_PAWN_MOVE_BIAS,
+    pawnMoveBias: BOT_PAWN_MOVE_BIAS,
     botMinDelayMs: BOT_MIN_DELAY_MS,
     botMaxDelayMs: BOT_MAX_DELAY_MS
   }

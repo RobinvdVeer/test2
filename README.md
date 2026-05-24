@@ -43,7 +43,25 @@ Run `npm test` to execute the Node.js test suite.
 - The human player is always White, and the bot is always Black.
 - Pawn promotion always becomes a queen; there is no promotion picker.
 - There is no save, move history, undo, multiplayer, backend, or public API beyond `window.BadChess.newGame()`.
-- Test/debug hooks are disabled by default and should not be used by application code.
+- Test/debug hooks are disabled by default; `window.__badChess` is internal, unsupported, and should not be used by application code.
+
+## Source layout
+
+- `public/` is the browser app served by Docker Compose. Browser imports in `public/app.js` must resolve inside this directory.
+- Root-level JavaScript files exist for the Node test harness and mirror the browser modules where needed.
+- Documentation examples use `public/` paths for browser code and root paths only when demonstrating Node test/helper usage.
+
+## API surface
+
+The supported browser API is intentionally tiny:
+
+```js
+window.BadChess.newGame();
+```
+
+That resets the visible game. Everything else in the app, including `window.__badChess`, `createGameController`, `createDomBoardView`, `playBadNoise`, and module internals under `public/`, is internal/unstable unless documented below.
+
+The reusable chess engine and bot helpers are supported for tests and experiments, but they mutate plain JavaScript state and are not packaged as a stable library.
 
 ## Configuration
 
@@ -57,8 +75,35 @@ Maintainers can tune the badness in `public/app.js` using the named constants ne
 
 Example: set `BOT_PAWN_MOVE_BIAS = 0.25` for fewer pawn moves, or `GLITCH_PROBABILITY = 0` to disable layout glitches by default.
 
-The reusable bot helper in `public/bot.js` accepts the same pawn-bias setting:
+`createGameController` accepts the same bot setting as `config.pawnMoveBias`. The older `config.botPawnMoveBias` spelling is still accepted as a compatibility alias, but new code should use `pawnMoveBias`.
+
+The reusable bot helper in `public/bot.js` accepts the canonical `pawnMoveBias` option. The older `pawnBias` spelling is still accepted as a compatibility alias, but new code should use `pawnMoveBias`:
 
 ```js
+import { makeBadBotMove } from './public/bot.js';
+
 makeBadBotMove(state, { pawnMoveBias: 0.25 });
 ```
+
+## Chess engine helper API
+
+`public/chess-engine.js` exposes plain helpers for tests and small experiments:
+
+```js
+import { createGameState, legalMovesFor, makeMove, getGameEnd } from './public/chess-engine.js';
+
+const state = createGameState();
+const moves = legalMovesFor(state, 6, 4); // white pawn on e2
+makeMove(state, moves.find(move => move.to.r === 4 && move.to.c === 4));
+state.turn = 'b';
+console.log(getGameEnd(state));
+```
+
+State shape and conventions:
+
+- `state.board` is an 8x8 array addressed as `board[row][column]`, with row `0` at Black's back rank and row `7` at White's back rank.
+- Pieces use FEN-like letters: uppercase `KQRBNP` for White, lowercase `kqrbnp` for Black, and `.` for an empty square.
+- Colors are `'w'` and `'b'`.
+- Moves have `{ from: { r, c }, to: { r, c } }` plus optional flags such as `promotion`, `doublePawn`, `enPassant`, or `castle`.
+- `makeMove(state, move)` mutates `state.board`, castling rights, and en-passant state. It does not advance `state.turn`; callers do that themselves.
+- `getGameEnd(state)` is pure. `checkGameEnd(state)` / `markGameOverIfNeeded(state)` may set `state.gameOver`.

@@ -1,4 +1,4 @@
-import { allLegalMoves, makeMove } from './chess-engine.js';
+import { allLegalMoves, makeMove } from './public/chess-engine.js';
 
 export function chooseBadBotMove(state, { pawnMoveBias = 0.7, pawnBias, random = Math.random, moves = allLegalMoves(state, 'b') } = {}) {
   if (!moves.length) return null;
