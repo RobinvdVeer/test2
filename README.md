@@ -4,7 +4,15 @@ A deliberately awful 90s-Geocities-inspired chess web app. You play White agains
 
 ## Run
 
-Open `index.html` in a browser. No backend, build step, dependencies, or dignity required.
+Serve the app over HTTP with Docker Compose:
+
+```sh
+docker compose up
+```
+
+Then open <http://localhost:8080> in a browser.
+
+Do not open `index.html` directly with a `file://` URL. The app uses ES modules, and modern browsers block module imports from `file://` origins.
 
 ## Check
 
