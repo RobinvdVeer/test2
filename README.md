@@ -12,9 +12,27 @@ docker compose up --build
 
 Then open <http://localhost:8080> in a browser.
 
-Docker Compose builds the static nginx image declared in `docker-compose.yml` and binds the demo server to localhost only. Kubernetes deployment manifests live under `deploy/` for Helm-based releases.
+Docker Compose builds the static nginx image declared in `docker-compose.yml` and binds the demo server to localhost only.
 
 Do not open `public/index.html` directly with a `file://` URL. The app uses ES modules, and modern browsers block module imports from `file://` origins.
+
+## Deploy
+
+Kubernetes deployment manifests live under `deploy/` for Helm-based releases. The chart path is `deploy/chart`, with environment overrides such as `deploy/values-staging.yaml`.
+
+Example staging upgrade:
+
+```sh
+helm upgrade --install really-bad-chess deploy/chart \
+  -f deploy/values-staging.yaml \
+  --set image.web.tag=<tag>
+```
+
+Common values to override:
+
+- `image.web.repository` and `image.web.tag` select the container image. Deployment tooling injects the tag at upgrade time.
+- `service.web.type`, `service.web.port`, and `service.web.targetPort` configure the Kubernetes Service.
+- `ingress.enabled`, `ingress.className`, `ingress.hosts`, and `ingress.tls` configure optional Ingress exposure.
 
 ## Check
 
@@ -26,7 +44,7 @@ Run `npm test` to execute the Node.js test suite.
 
 ## How to play
 
-1. Start the app with `docker compose up` and open <http://localhost:8080>.
+1. Start the app with `docker compose up --build` and open <http://localhost:8080>.
 2. Click one of your White pieces to select it.
 3. Click a highlighted destination square to move there.
 4. Wait briefly while the Black bot thinks very incorrectly and makes a move.
@@ -47,11 +65,14 @@ Run `npm test` to execute the Node.js test suite.
 
 ## Source layout
 
-- `public/` is the browser app served by Docker Compose. Browser imports in `public/app.js` must resolve inside this directory.
-- Root-level JavaScript files exist for the Node test harness and mirror the browser modules where needed.
-- Documentation examples use `public/` paths for browser code and root paths only when demonstrating Node test/helper usage.
+- `public/` is the canonical browser app served by Docker Compose. Browser imports in `public/app.js` must resolve inside this directory.
+- The Node test suite imports the canonical modules from `public/`.
+- Root-level JavaScript files are legacy development copies and are not part of the supported API; do not import them from new code.
+- Documentation examples use `public/` paths for browser code and supported helper usage.
 
 ## API surface
+
+### Supported browser API
 
 The supported browser API is intentionally tiny:
 
@@ -59,9 +80,15 @@ The supported browser API is intentionally tiny:
 window.BadChess.newGame();
 ```
 
-That resets the visible game. Everything else in the app, including `window.__badChess`, `createGameController`, `createDomBoardView`, `playBadNoise`, and module internals under `public/`, is internal/unstable unless documented below.
+That resets the visible game.
 
-The reusable chess engine and bot helpers are supported for tests and experiments, but they mutate plain JavaScript state and are not packaged as a stable library.
+### Supported helper API
+
+The reusable helpers in `public/chess-engine.js` and `public/bot.js` are supported for tests and small experiments. They mutate plain JavaScript state and are not packaged as a stable library.
+
+### Internal and testing API
+
+Everything else in the app is internal unless explicitly documented here. In particular, `createGameController`, `createDomBoardView`, `playBadNoise`, root-level JavaScript files, and `window.__badChess` are unsupported implementation/testing details. Test/debug hooks are disabled by default and should not be used by application code.
 
 ## Configuration
 
@@ -75,7 +102,7 @@ Maintainers can tune the badness in `public/app.js` using the named constants ne
 
 Example: set `BOT_PAWN_MOVE_BIAS = 0.25` for fewer pawn moves, or `GLITCH_PROBABILITY = 0` to disable layout glitches by default.
 
-`createGameController` accepts the same bot setting as `config.pawnMoveBias`. The older `config.botPawnMoveBias` spelling is still accepted as a compatibility alias, but new code should use `pawnMoveBias`.
+The internal `createGameController` accepts the same bot setting as `config.pawnMoveBias`. The older `config.botPawnMoveBias` spelling is still accepted as a compatibility alias for tests and legacy code, but new internal code should use `pawnMoveBias`.
 
 The reusable bot helper in `public/bot.js` accepts the canonical `pawnMoveBias` option. The older `pawnBias` spelling is still accepted as a compatibility alias, but new code should use `pawnMoveBias`:
 
@@ -84,6 +111,8 @@ import { makeBadBotMove } from './public/bot.js';
 
 makeBadBotMove(state, { pawnMoveBias: 0.25 });
 ```
+
+`makeBadBotMove` / `chooseBadBotMove` are black-bot helpers: by default they choose from Black's legal moves, unless you supply a custom `moves` list. `makeBadBotMove` mutates the passed state by applying the chosen move, returns `false` if no move is available, and does not advance `state.turn`; callers must update `state.turn` themselves.
 
 ## Chess engine helper API
 
