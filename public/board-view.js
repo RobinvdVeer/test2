@@ -1,7 +1,7 @@
 import { colorOf } from './chess-engine.js';
 import { PIECES } from './piece-symbols.js';
 
-export function createDomBoardView({ boardEl, statusEl, chaosEl, onSquareClick, random = Math.random, glitch = {} }) {
+export function createDomBoardView({ boardEl, statusEl, onSquareClick, documentRef = document, random = Math.random, glitch = {} }) {
   const squareEls = [];
   const config = {
     probability: 0.08,
@@ -14,7 +14,7 @@ export function createDomBoardView({ boardEl, statusEl, chaosEl, onSquareClick, 
     for (let r = 0; r < 8; r++) {
       squareEls[r] = [];
       for (let c = 0; c < 8; c++) {
-        const sq = document.createElement('button');
+        const sq = documentRef.createElement('button');
         sq.dataset.r = r;
         sq.dataset.c = c;
         sq.addEventListener('click', () => onSquareClick(r, c));
@@ -24,7 +24,7 @@ export function createDomBoardView({ boardEl, statusEl, chaosEl, onSquareClick, 
     }
   }
 
-  function render(game, { selected = null, legalForSelected = [] } = {}) {
+  function render(game, { selected = null, legalForSelected = [], chaosEnabled = false } = {}) {
     const legalKeys = new Set(legalForSelected.map(m => `${m.to.r},${m.to.c}`));
     for (let r = 0; r < 8; r++) {
       for (let c = 0; c < 8; c++) {
@@ -35,7 +35,7 @@ export function createDomBoardView({ boardEl, statusEl, chaosEl, onSquareClick, 
         sq.style.removeProperty('--r');
         if (selected && selected.r === r && selected.c === c) sq.classList.add('selected');
         if (legalKeys.has(`${r},${c}`)) sq.classList.add('legal');
-        maybeAddGlitch(sq);
+        maybeAddGlitch(sq, chaosEnabled);
         const piece = game.board[r][c];
         if (sq.dataset.piece !== piece) {
           sq.dataset.piece = piece;
@@ -45,8 +45,8 @@ export function createDomBoardView({ boardEl, statusEl, chaosEl, onSquareClick, 
     }
   }
 
-  function maybeAddGlitch(square) {
-    if (!chaosEl.checked || random() >= config.probability) return;
+  function maybeAddGlitch(square, chaosEnabled) {
+    if (!chaosEnabled || random() >= config.probability) return;
     square.classList.add('glitch');
     square.style.setProperty('--x', `${randomSignedInt(config.maxOffsetPx)}px`);
     square.style.setProperty('--y', `${randomSignedInt(config.maxOffsetPx)}px`);

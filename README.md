@@ -43,7 +43,7 @@ Run `npm test` to execute the Node.js test suite.
 - The human player is always White, and the bot is always Black.
 - Pawn promotion always becomes a queen; there is no promotion picker.
 - There is no save, move history, undo, multiplayer, backend, or public API beyond `window.BadChess.newGame()`.
-- `window.__badChess` is an internal, unsupported test hook and should not be used by application code.
+- Test/debug hooks are disabled by default and should not be used by application code.
 
 ## Configuration
 
@@ -57,7 +57,7 @@ Maintainers can tune the badness in `public/app.js` using the named constants ne
 
 Example: set `BOT_PAWN_MOVE_BIAS = 0.25` for fewer pawn moves, or `GLITCH_PROBABILITY = 0` to disable layout glitches by default.
 
-The reusable bot helper in `bot.js` accepts the same pawn-bias setting:
+The reusable bot helper in `public/bot.js` accepts the same pawn-bias setting:
 
 ```js
 makeBadBotMove(state, { pawnMoveBias: 0.25 });

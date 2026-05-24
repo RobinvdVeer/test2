@@ -29,6 +29,7 @@ export function inCheck(state, color) { return isInCheck(state.board, color); }
 
 function inBounds(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
 function pieceAt(state, r, c) { return state.board[r][c]; }
+function cloneBoard(board) { return board.map(row => row.slice()); }
 
 export function allLegalMoves(state, color) {
   const out = [];
@@ -41,10 +42,9 @@ export function allLegalMoves(state, color) {
 export function legalMovesFor(state, r, c) {
   const color = colorOf(pieceAt(state, r, c));
   return pseudoMovesFor(state, r, c).filter(m => {
-    const undo = applyMoveTo(state.board, m);
-    const legal = !isInCheck(state.board, color);
-    undoMove(state.board, undo);
-    return legal;
+    const board = cloneBoard(state.board);
+    applyMoveTo(board, m);
+    return !isInCheck(board, color);
   });
 }
 
