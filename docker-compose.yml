@@ -1,0 +1,9 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/pi/really-bad-chess-web-app
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped

@@ -12,9 +12,40 @@ docker compose up
 
 Then open <http://localhost:8080> in a browser.
 
-Docker Compose binds the demo server to localhost only and serves only the static files in `public/`. For production deployment, use a purpose-built web server or reverse proxy with appropriate access controls and TLS.
+Docker Compose binds the demo server to localhost only and serves the app from the container image built by the top-level `Dockerfile`.
 
 Do not open `public/index.html` directly with a `file://` URL. The app uses ES modules, and modern browsers block module imports from `file://` origins.
+
+## Deployment
+
+The buildable service is named `app` in `docker-compose.yml`. Its image target is:
+
+```text
+ghcr.io/pi/really-bad-chess-web-app
+```
+
+For local image verification, use Docker Compose:
+
+```sh
+docker compose build app
+docker compose up
+```
+
+Kubernetes deployment assets live under `deploy/`:
+
+- `deploy/chart/` contains the Helm chart.
+- `deploy/chart/values.yaml` contains base chart values.
+- `deploy/values-staging.yaml` is an example per-environment override file.
+
+Example Helm deployment:
+
+```sh
+helm upgrade --install really-bad-chess ./deploy/chart \
+  -f deploy/values-staging.yaml \
+  --set image.app.tag=<image-tag>
+```
+
+`image.app.tag` is expected to be supplied by the deployment pipeline, such as `pi_deploy`, when promoting a built GHCR image.
 
 ## Check
 
@@ -47,11 +78,13 @@ Run `npm test` to execute the Node.js test suite.
 
 ## Source layout
 
-- `public/` is the browser app served by Docker Compose. Browser imports in `public/app.js` must resolve inside this directory.
-- Root-level JavaScript files exist for the Node test harness and mirror the browser modules where needed.
-- Documentation examples use `public/` paths for browser code and root paths only when demonstrating Node test/helper usage.
+- `public/` is the canonical browser app and helper-module source served by Docker Compose and the production container. Browser imports in `public/app.js` must resolve inside this directory.
+- Root-level JavaScript files are compatibility entry points that delegate to the canonical modules in `public/`. Prefer `public/` imports in new code; root-level entry points are not part of the supported browser API.
+- Documentation examples use `public/` paths for browser code and helper-module examples.
 
 ## API surface
+
+### Browser API
 
 The supported browser API is intentionally tiny:
 
@@ -59,9 +92,20 @@ The supported browser API is intentionally tiny:
 window.BadChess.newGame();
 ```
 
-That resets the visible game. Everything else in the app, including `window.__badChess`, `createGameController`, `createDomBoardView`, `playBadNoise`, and module internals under `public/`, is internal/unstable unless documented below.
+That resets the visible game. This is the only stable application API exposed on `window.BadChess`.
 
-The reusable chess engine and bot helpers are supported for tests and experiments, but they mutate plain JavaScript state and are not packaged as a stable library.
+### Experimental helper modules
+
+The following `public/` modules are supported for tests and small experiments, but they are not packaged as a stable library and may change between app versions:
+
+- `public/chess-engine.js`: `createGameState`, `colorOf`, `enemy`, `inCheck`, `allLegalMoves`, `legalMovesFor`, `pseudoMovesFor`, `makeMove`, `getGameEnd`, `markGameOverIfNeeded`, and `checkGameEnd`.
+- `public/bot.js`: `chooseBadBotMove` and `makeBadBotMove`.
+
+These helpers mutate plain JavaScript state where noted below. Prefer imports from `public/`, not root-level legacy files.
+
+### Internal-only APIs
+
+`window.__badChess`, `createGameController`, `getGameControllerDebugApi`, `createDomBoardView`, `playBadNoise`, and the controller/view/audio modules are internal implementation details. They exist for the app and tests, are not compatibility-stable, and should not be used by application code.
 
 ## Configuration
 
@@ -75,14 +119,47 @@ Maintainers can tune the badness in `public/app.js` using the named constants ne
 
 Example: set `BOT_PAWN_MOVE_BIAS = 0.25` for fewer pawn moves, or `GLITCH_PROBABILITY = 0` to disable layout glitches by default.
 
-`createGameController` accepts the same bot setting as `config.pawnMoveBias`. The older `config.botPawnMoveBias` spelling is still accepted as a compatibility alias, but new code should use `pawnMoveBias`.
+Runtime deployment configuration lives in `deploy/chart/values.yaml`, with environment overrides such as `deploy/values-staging.yaml`:
 
-The reusable bot helper in `public/bot.js` accepts the canonical `pawnMoveBias` option. The older `pawnBias` spelling is still accepted as a compatibility alias, but new code should use `pawnMoveBias`:
+| Value | Purpose |
+| --- | --- |
+| `image.app.repository` | GHCR repository for the `app` service image. |
+| `image.app.tag` | Image tag to deploy; normally injected by `pi_deploy` or set with `--set`. |
+| `image.app.pullPolicy` | Kubernetes image pull policy. |
+| `replicaCount` | Number of app pods. |
+| `service.type`, `service.port`, `service.targetPort` | Kubernetes Service exposure and ports. |
+| `ingress.*` | Optional ingress host, class, annotations, paths, and TLS secret references. |
+| `resources`, `nodeSelector`, `tolerations`, `affinity` | Standard pod scheduling and resource controls. |
+
+Internally, `createGameController` uses the same bot setting as `config.pawnMoveBias`. The older `config.botPawnMoveBias` spelling remains as a compatibility alias inside the app, but new internal code should use `pawnMoveBias`.
+
+## Bot helper API
+
+`public/bot.js` exports two experimental helpers:
+
+- `chooseBadBotMove(state, options)` returns a move object or `null`. It does not mutate `state`.
+- `makeBadBotMove(state, options)` chooses and applies a move, mutating `state.board` via `makeMove`. It returns `true` when a move was made and `false` when no legal move is available.
+
+Supported options are:
+
+- `pawnMoveBias`: probability from `0` to `1` that the bot prefers available pawn moves. Defaults to `0.7`.
+- `pawnBias`: deprecated alias for `pawnMoveBias`; avoid it in new code.
+- `random`: random-number function used for deterministic tests. Defaults to `Math.random`.
+- `moves`: optional precomputed legal moves for Black. Defaults to `allLegalMoves(state, 'b')`.
+
+Example with deterministic move selection:
 
 ```js
-import { makeBadBotMove } from './public/bot.js';
+import { createGameState } from './public/chess-engine.js';
+import { chooseBadBotMove, makeBadBotMove } from './public/bot.js';
 
-makeBadBotMove(state, { pawnMoveBias: 0.25 });
+const state = createGameState();
+const alwaysFirst = () => 0;
+const move = chooseBadBotMove(state, { pawnMoveBias: 1, random: alwaysFirst });
+
+if (move) {
+  makeBadBotMove(state, { moves: [move], random: alwaysFirst });
+}
 ```
 
 ## Chess engine helper API

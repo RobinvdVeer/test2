@@ -42,9 +42,10 @@ export function allLegalMoves(state, color) {
 export function legalMovesFor(state, r, c) {
   const color = colorOf(pieceAt(state, r, c));
   return pseudoMovesFor(state, r, c).filter(m => {
-    const board = cloneBoard(state.board);
-    applyMoveTo(board, m);
-    return !isInCheck(board, color);
+    const undo = applyMoveTo(state.board, m);
+    const legal = !isInCheck(state.board, color);
+    undoMove(state.board, undo);
+    return legal;
   });
 }
 
@@ -122,20 +123,41 @@ function kingMoves(state, r, c, color) {
   const moves = steppedMoves(state, r, c, color, KING_DIRS);
   if (isInCheck(state.board, color)) return moves;
 
-  const home = color === 'w' ? 7 : 0;
-  if (r !== home || c !== 4) return moves;
+  const home = homeRow(color);
+  if (!kingIsOnHomeSquare(r, c, home)) return moves;
 
-  const kFlag = color === 'w' ? 'K' : 'k';
-  const qFlag = color === 'w' ? 'Q' : 'q';
-  const attackedBy = enemy(color);
-  const rook = color === 'w' ? 'R' : 'r';
-  if (state.castling[kFlag] && pieceAt(state, home, 7) === rook && pieceAt(state, home, 5) === '.' && pieceAt(state, home, 6) === '.' && !squareAttacked(state.board, home, 5, attackedBy) && !squareAttacked(state.board, home, 6, attackedBy)) {
-    moves.push(createMove(r, c, home, 6, { castle: 'k' }));
-  }
-  if (state.castling[qFlag] && pieceAt(state, home, 0) === rook && pieceAt(state, home, 1) === '.' && pieceAt(state, home, 2) === '.' && pieceAt(state, home, 3) === '.' && !squareAttacked(state.board, home, 3, attackedBy) && !squareAttacked(state.board, home, 2, attackedBy)) {
-    moves.push(createMove(r, c, home, 2, { castle: 'q' }));
-  }
+  if (canCastleKingSide(state, color, home)) moves.push(createMove(r, c, home, 6, { castle: 'k' }));
+  if (canCastleQueenSide(state, color, home)) moves.push(createMove(r, c, home, 2, { castle: 'q' }));
   return moves;
+}
+
+function homeRow(color) { return color === 'w' ? 7 : 0; }
+function kingIsOnHomeSquare(r, c, home) { return r === home && c === 4; }
+function rookFor(color) { return color === 'w' ? 'R' : 'r'; }
+function castlingFlag(color, side) { return color === 'w' ? side.toUpperCase() : side; }
+
+function canCastleKingSide(state, color, home) {
+  const attackedBy = enemy(color);
+  return state.castling[castlingFlag(color, 'k')]
+    && pieceAt(state, home, 7) === rookFor(color)
+    && squaresEmpty(state, home, [5, 6])
+    && squaresNotAttacked(state.board, home, [5, 6], attackedBy);
+}
+
+function canCastleQueenSide(state, color, home) {
+  const attackedBy = enemy(color);
+  return state.castling[castlingFlag(color, 'q')]
+    && pieceAt(state, home, 0) === rookFor(color)
+    && squaresEmpty(state, home, [1, 2, 3])
+    && squaresNotAttacked(state.board, home, [3, 2], attackedBy);
+}
+
+function squaresEmpty(state, r, columns) {
+  return columns.every(c => pieceAt(state, r, c) === '.');
+}
+
+function squaresNotAttacked(board, r, columns, byColor) {
+  return columns.every(c => !squareAttacked(board, r, c, byColor));
 }
 
 export function makeMove(state, move) {
@@ -149,46 +171,60 @@ function applyMoveTo(board, move) {
   const p = board[move.from.r][move.from.c];
   const undo = {
     move,
-    fromPiece: p,
-    toPiece: board[move.to.r][move.to.c],
-    enPassantPiece: move.enPassant ? board[move.from.r][move.to.c] : null,
-    castleRook: move.castle ? {
-      fromC: move.castle === 'k' ? 7 : 0,
-      toC: move.castle === 'k' ? 5 : 3,
-      fromPiece: board[move.to.r][move.castle === 'k' ? 7 : 0],
-      toPiece: board[move.to.r][move.castle === 'k' ? 5 : 3]
-    } : null
+    piece: p,
+    captured: board[move.to.r][move.to.c],
+    enPassantCaptured: move.enPassant ? board[move.from.r][move.to.c] : null
   };
+
   board[move.from.r][move.from.c] = '.';
   if (move.enPassant) board[move.from.r][move.to.c] = '.';
   board[move.to.r][move.to.c] = move.promotion || p;
-  if (move.castle === 'k') { board[move.to.r][5] = board[move.to.r][7]; board[move.to.r][7] = '.'; }
-  if (move.castle === 'q') { board[move.to.r][3] = board[move.to.r][0]; board[move.to.r][0] = '.'; }
+  if (move.castle === 'k') moveRookForCastle(board, move.to.r, 7, 5);
+  if (move.castle === 'q') moveRookForCastle(board, move.to.r, 0, 3);
   return undo;
 }
 
 function undoMove(board, undo) {
   const { move } = undo;
-  if (undo.castleRook) {
-    board[move.to.r][undo.castleRook.fromC] = undo.castleRook.fromPiece;
-    board[move.to.r][undo.castleRook.toC] = undo.castleRook.toPiece;
-  }
-  board[move.from.r][move.from.c] = undo.fromPiece;
-  board[move.to.r][move.to.c] = undo.toPiece;
-  if (move.enPassant) board[move.from.r][move.to.c] = undo.enPassantPiece;
+  board[move.from.r][move.from.c] = undo.piece;
+  board[move.to.r][move.to.c] = undo.captured;
+  if (move.enPassant) board[move.from.r][move.to.c] = undo.enPassantCaptured;
+  if (move.castle === 'k') moveRookForCastle(board, move.to.r, 5, 7);
+  if (move.castle === 'q') moveRookForCastle(board, move.to.r, 3, 0);
+}
+
+function moveRookForCastle(board, row, fromC, toC) {
+  board[row][toC] = board[row][fromC];
+  board[row][fromC] = '.';
 }
 
 function updateCastlingRights(castling, move, p) {
+  revokeRightsForMovedKing(castling, p);
+  revokeRightsForMovedRook(castling, move, p);
+  revokeRightsForCapturedCornerRook(castling, move);
+}
+
+function revokeRightsForMovedKing(castling, p) {
   if (p === 'K') castling.K = castling.Q = false;
   if (p === 'k') castling.k = castling.q = false;
-  if (p === 'R' && move.from.r === 7 && move.from.c === 0) castling.Q = false;
-  if (p === 'R' && move.from.r === 7 && move.from.c === 7) castling.K = false;
-  if (p === 'r' && move.from.r === 0 && move.from.c === 0) castling.q = false;
-  if (p === 'r' && move.from.r === 0 && move.from.c === 7) castling.k = false;
-  if (move.to.r === 7 && move.to.c === 0) castling.Q = false;
-  if (move.to.r === 7 && move.to.c === 7) castling.K = false;
-  if (move.to.r === 0 && move.to.c === 0) castling.q = false;
-  if (move.to.r === 0 && move.to.c === 7) castling.k = false;
+}
+
+function revokeRightsForMovedRook(castling, move, p) {
+  if (p === 'R' && isSquare(move.from, 7, 0)) castling.Q = false;
+  if (p === 'R' && isSquare(move.from, 7, 7)) castling.K = false;
+  if (p === 'r' && isSquare(move.from, 0, 0)) castling.q = false;
+  if (p === 'r' && isSquare(move.from, 0, 7)) castling.k = false;
+}
+
+function revokeRightsForCapturedCornerRook(castling, move) {
+  if (isSquare(move.to, 7, 0)) castling.Q = false;
+  if (isSquare(move.to, 7, 7)) castling.K = false;
+  if (isSquare(move.to, 0, 0)) castling.q = false;
+  if (isSquare(move.to, 0, 7)) castling.k = false;
+}
+
+function isSquare(square, r, c) {
+  return square.r === r && square.c === c;
 }
 
 function isInCheck(board, color) {
@@ -210,20 +246,41 @@ function attacksSquare(board, r, c, tr, tc) {
   const p = board[r][c].toLowerCase();
   const col = colorOf(board[r][c]);
   const dr = tr - r, dc = tc - c;
-  if (p === 'p') return dr === (col === 'w' ? -1 : 1) && Math.abs(dc) === 1;
-  if (p === 'n') return (Math.abs(dr) === 2 && Math.abs(dc) === 1) || (Math.abs(dr) === 1 && Math.abs(dc) === 2);
-  if (p === 'k') return Math.max(Math.abs(dr), Math.abs(dc)) === 1;
-  const clear = (sr, sc) => {
-    let rr = r + sr, cc = c + sc;
-    while (rr !== tr || cc !== tc) {
-      if (board[rr][cc] !== '.') return false;
-      rr += sr; cc += sc;
-    }
-    return true;
-  };
-  if ((p === 'b' || p === 'q') && Math.abs(dr) === Math.abs(dc) && clear(Math.sign(dr), Math.sign(dc))) return true;
-  if ((p === 'r' || p === 'q') && (dr === 0 || dc === 0) && clear(Math.sign(dr), Math.sign(dc))) return true;
+  if (p === 'p') return pawnAttacksDelta(col, dr, dc);
+  if (p === 'n') return knightAttacksDelta(dr, dc);
+  if (p === 'k') return kingAttacksDelta(dr, dc);
+  if (canAttackDiagonally(p, dr, dc) && pathClear(board, r, c, tr, tc, Math.sign(dr), Math.sign(dc))) return true;
+  if (canAttackOrthogonally(p, dr, dc) && pathClear(board, r, c, tr, tc, Math.sign(dr), Math.sign(dc))) return true;
   return false;
+}
+
+function pawnAttacksDelta(color, dr, dc) {
+  return dr === (color === 'w' ? -1 : 1) && Math.abs(dc) === 1;
+}
+
+function knightAttacksDelta(dr, dc) {
+  return (Math.abs(dr) === 2 && Math.abs(dc) === 1) || (Math.abs(dr) === 1 && Math.abs(dc) === 2);
+}
+
+function kingAttacksDelta(dr, dc) {
+  return Math.max(Math.abs(dr), Math.abs(dc)) === 1;
+}
+
+function canAttackDiagonally(piece, dr, dc) {
+  return (piece === 'b' || piece === 'q') && Math.abs(dr) === Math.abs(dc);
+}
+
+function canAttackOrthogonally(piece, dr, dc) {
+  return (piece === 'r' || piece === 'q') && (dr === 0 || dc === 0);
+}
+
+function pathClear(board, r, c, tr, tc, sr, sc) {
+  let rr = r + sr, cc = c + sc;
+  while (rr !== tr || cc !== tc) {
+    if (board[rr][cc] !== '.') return false;
+    rr += sr; cc += sc;
+  }
+  return true;
 }
 
 export function getGameEnd(state) {

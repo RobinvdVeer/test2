@@ -1,11 +1,12 @@
-import { allLegalMoves, legalMovesFor, makeMove } from './public/chess-engine.js';
-import { createGameControllerSession } from './public/game-controller.js';
+import { allLegalMoves, colorOf, inCheck, legalMovesFor, makeMove, pseudoMovesFor } from './chess-engine.js';
+import { createGameControllerSession } from './game-controller.js';
 
-export { createGameControllerSession } from './public/game-controller.js';
-
-export function createGameController(options) {
+export function createDebuggableGameController(options) {
   const { controller, internals } = createGameControllerSession(options);
+  return { controller, debugApi: createGameControllerDebugApi(internals) };
+}
 
+function createGameControllerDebugApi(internals) {
   function setState(next = {}) {
     const game = internals.game;
     if (next.board) game.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
@@ -30,24 +31,20 @@ export function createGameController(options) {
     };
   }
 
-  function showGameEndIfNeeded() {
-    return internals.showGameEndIfNeeded().over;
-  }
-
-  function botMove(cachedMoves = null) {
-    const result = internals.botMove(cachedMoves);
-    return result && typeof result.over === 'boolean' ? result.over : result;
-  }
-
   return {
-    ...controller,
-    afterPlayerMove: internals.afterPlayerMove,
-    botMove,
-    showGameEndIfNeeded,
+    newGame: internals.newGame,
+    render: internals.render,
+    selectSquare: internals.selectSquare,
+    afterMove: internals.afterPlayerMove,
+    botMove: internals.botMove,
+    checkGameEnd() { return internals.showGameEndIfNeeded().over; },
+    inCheck(color) { return inCheck(internals.game, color); },
+    colorOf,
     setState,
     getState,
     allLegalMoves(color) { return allLegalMoves(internals.game, color); },
     legalMovesFor(r, c) { return legalMovesFor(internals.game, r, c); },
+    pseudoMovesFor(r, c) { return pseudoMovesFor(internals.game, r, c); },
     makeMove(move) { return makeMove(internals.game, move); }
   };
 }
