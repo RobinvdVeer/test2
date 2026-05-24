@@ -49,26 +49,27 @@ export function createGameController({ view, random = Math.random, setTimeoutFn 
   function afterPlayerMove() {
     game.turn = 'b';
     render();
-    if (showGameEndIfNeeded()) return;
+    const gameEnd = showGameEndIfNeeded();
+    if (gameEnd.over) return;
     setStatus('Bot thinking very incorrectly...');
-    setTimeoutFn(botMove, randomDelay(botMinDelayMs, botMaxDelayMs));
+    setTimeoutFn(() => botMove(gameEnd.moves), randomDelay(botMinDelayMs, botMaxDelayMs));
   }
 
-  function botMove() {
+  function botMove(cachedMoves = null) {
     if (game.gameOver) return;
-    if (!makeBadBotMove(game, { pawnBias: botPawnMoveBias, random })) return showGameEndIfNeeded();
+    if (!makeBadBotMove(game, { pawnBias: botPawnMoveBias, random, moves: cachedMoves || undefined })) return showGameEndIfNeeded();
     game.turn = 'w';
     render();
-    if (!showGameEndIfNeeded()) setStatus(inCheck(game, 'w') ? 'CHECK! The bot did that by accident.' : 'Your move. The bot regrets nothing.');
+    if (!showGameEndIfNeeded().over) setStatus(inCheck(game, 'w') ? 'CHECK! The bot did that by accident.' : 'Your move. The bot regrets nothing.');
   }
 
   function showGameEndIfNeeded() {
     const result = getGameEnd(game);
-    if (!result.over) return false;
+    if (!result.over) return result;
     game.gameOver = true;
     const side = result.color === 'w' ? 'White' : 'Black';
     setStatus(result.checkmate ? `${side} is checkmated. Incredible and upsetting.` : 'Stalemate. Nobody wins, especially chess.');
-    return true;
+    return result;
   }
 
   function render() {
