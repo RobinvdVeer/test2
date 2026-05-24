@@ -1,6 +1,13 @@
 import { PIECES, allLegalMoves as engineAllLegalMoves, checkGameEnd, colorOf, createGameState, inCheck, legalMovesFor as engineLegalMovesFor, makeMove as engineMakeMove } from './chess-engine.js';
-import { makeBadBotMove } from './bot.js';
 import { playBadNoise } from './audio.js';
+
+// Configuration knobs for maintainers who want to tune the badness without spelunking.
+const GLITCH_PROBABILITY = 0.08;
+const GLITCH_MAX_OFFSET_PX = 6;
+const GLITCH_MAX_ROTATION_DEG = 4;
+const BOT_PAWN_MOVE_BIAS = 0.7;
+const BOT_MIN_DELAY_MS = 550;
+const BOT_MAX_DELAY_MS = 1250;
 
 let game = createGameState();
 let selected = null;
@@ -55,11 +62,11 @@ function render() {
 }
 
 function maybeAddGlitch(square) {
-  if (!chaosEl.checked || Math.random() >= 0.08) return;
+  if (!chaosEl.checked || Math.random() >= GLITCH_PROBABILITY) return;
   square.classList.add('glitch');
-  square.style.setProperty('--x', `${Math.floor(Math.random() * 13) - 6}px`);
-  square.style.setProperty('--y', `${Math.floor(Math.random() * 13) - 6}px`);
-  square.style.setProperty('--r', `${Math.floor(Math.random() * 9) - 4}deg`);
+  square.style.setProperty('--x', `${randomSignedInt(GLITCH_MAX_OFFSET_PX)}px`);
+  square.style.setProperty('--y', `${randomSignedInt(GLITCH_MAX_OFFSET_PX)}px`);
+  square.style.setProperty('--r', `${randomSignedInt(GLITCH_MAX_ROTATION_DEG)}deg`);
 }
 
 function pieceHtml(piece) {
@@ -101,12 +108,17 @@ function afterPlayerMove() {
   render();
   if (showGameEndIfNeeded()) return;
   setStatus('Bot thinking very incorrectly...');
-  setTimeout(botMove, 550 + Math.random() * 700);
+  setTimeout(botMove, randomDelay(BOT_MIN_DELAY_MS, BOT_MAX_DELAY_MS));
 }
 
 function botMove() {
   if (game.gameOver) return;
-  if (!makeBadBotMove(game)) return showGameEndIfNeeded();
+  const moves = engineAllLegalMoves(game, 'b');
+  if (!moves.length) return showGameEndIfNeeded();
+  // Bad bot: heavily prefers random pawn moves, otherwise random chaos.
+  const pawnMoves = moves.filter(m => game.board[m.from.r][m.from.c].toLowerCase() === 'p');
+  const pool = pawnMoves.length && Math.random() < BOT_PAWN_MOVE_BIAS ? pawnMoves : moves;
+  engineMakeMove(game, pool[Math.floor(Math.random() * pool.length)]);
   game.turn = 'w';
   render();
   if (!showGameEndIfNeeded()) setStatus(inCheck(game, 'w') ? 'CHECK! The bot did that by accident.' : 'Your move. The bot regrets nothing.');
@@ -121,10 +133,12 @@ function showGameEndIfNeeded() {
 }
 
 function setStatus(s) { statusEl.textContent = s; }
-
+function randomSignedInt(maxAbs) { return Math.floor(Math.random() * (maxAbs * 2 + 1)) - maxAbs; }
+function randomDelay(min, max) { return min + Math.random() * (max - min); }
 function cloneBoard() { return game.board.map(row => row.slice()); }
 
 if (typeof window !== 'undefined') {
+  window.BadChess = { newGame };
   window.__badChess = {
     newGame,
     render,
