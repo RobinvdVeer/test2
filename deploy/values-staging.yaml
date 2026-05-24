@@ -3,7 +3,7 @@ replicaCount: 1
 image:
   app:
     repository: ghcr.io/robinvdveer/really-bad-chess-web-app
-    tag: latest
+    tag: b84612a
     pullPolicy: IfNotPresent
 
 ingress:
