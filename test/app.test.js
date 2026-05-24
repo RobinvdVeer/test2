@@ -1,7 +1,17 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import http from 'node:http';
+
+import {
+  allLegalMoves,
+  checkGameEnd,
+  createGameState,
+  legalMovesFor,
+  makeMove
+} from '../chess-engine.js';
+import { makeBadBotMove } from '../bot.js';
+import { playBadNoise } from '../audio.js';
 
 function createClassList(el) {
   const set = new Set();
@@ -21,7 +31,11 @@ class ElementStub {
     this.id = id;
     this.children = [];
     this.dataset = {};
-    this.style = { values: {}, setProperty: (k, v) => { this.style.values[k] = v; } };
+    this.style = {
+      values: {},
+      setProperty: (k, v) => { this.style.values[k] = v; },
+      removeProperty: k => { delete this.style.values[k]; }
+    };
     this.listeners = {};
     this.checked = false;
     this._innerHTML = '';
@@ -40,7 +54,39 @@ class ElementStub {
   click() { this.dispatchEvent({ type: 'click' }); }
 }
 
-function loadApp({ random = () => 0.99 } = {}) {
+function createAudioContextRecorder() {
+  const calls = [];
+  const oscillators = [];
+  const gains = [];
+  function AudioContext() {
+    this.currentTime = 10;
+    this.destination = { kind: 'destination' };
+    this.createOscillator = () => {
+      const oscillator = {
+        type: '',
+        frequency: { value: 0 },
+        connect: target => calls.push(['osc.connect', target]),
+        start: () => calls.push(['osc.start']),
+        stop: time => calls.push(['osc.stop', time])
+      };
+      oscillators.push(oscillator);
+      return oscillator;
+    };
+    this.createGain = () => {
+      const gain = {
+        gain: { value: 0 },
+        connect: target => calls.push(['gain.connect', target])
+      };
+      gains.push(gain);
+      return gain;
+    };
+  }
+  return { AudioContext, calls, oscillators, gains };
+}
+
+let appImportCounter = 0;
+
+async function loadApp({ random = () => 0.99, audioContext } = {}) {
   const ids = {
     board: new ElementStub('div', 'board'),
     status: new ElementStub('div', 'status'),
@@ -54,185 +100,348 @@ function loadApp({ random = () => 0.99 } = {}) {
     getElementById(id) { return ids[id]; },
     createElement(tagName) { return new ElementStub(tagName); }
   };
-  const math = Object.create(Math);
-  math.random = random;
-  const context = {
-    document,
-    window: null,
-    Math: math,
-    setTimeout(fn, delay) { timers.push({ fn, delay }); return timers.length; },
-    clearTimeout() {},
-    AudioContext: function AudioContext() {},
-    webkitAudioContext: function WebkitAudioContext() {}
+  const originalDocument = globalThis.document;
+  const originalWindow = globalThis.window;
+  const originalRandom = Math.random;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const originalAudioContext = globalThis.AudioContext;
+  const originalWebkitAudioContext = globalThis.webkitAudioContext;
+  const recorder = audioContext || createAudioContextRecorder();
+
+  globalThis.document = document;
+  globalThis.window = globalThis;
+  globalThis.AudioContext = recorder.AudioContext;
+  globalThis.webkitAudioContext = recorder.AudioContext;
+  Math.random = random;
+  globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
+  globalThis.clearTimeout = () => {};
+
+  const restore = () => {
+    globalThis.document = originalDocument;
+    globalThis.window = originalWindow;
+    Math.random = originalRandom;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    if (originalAudioContext === undefined) delete globalThis.AudioContext;
+    else globalThis.AudioContext = originalAudioContext;
+    if (originalWebkitAudioContext === undefined) delete globalThis.webkitAudioContext;
+    else globalThis.webkitAudioContext = originalWebkitAudioContext;
   };
-  context.window = context;
-  vm.createContext(context);
-  vm.runInContext(fs.readFileSync('app.js', 'utf8'), context, { filename: 'app.js' });
-  return { api: context.window.__badChess, ids, timers, context };
+
+  try {
+    const url = new URL('../app.js', import.meta.url);
+    url.searchParams.set('testRun', `${Date.now()}-${appImportCounter++}`);
+    await import(url.href);
+  } catch (err) {
+    restore();
+    throw err;
+  }
+
+  return { api: globalThis.__badChess, ids, timers, audio: recorder, restore };
 }
 
-const empty = [
-  '........', '........', '........', '........',
-  '........', '........', '........', '........'
-];
-const destinations = moves => JSON.parse(JSON.stringify(moves.map(m => `${m.to.r},${m.to.c}`).sort()));
+const destinations = moves => moves.map(m => `${m.to.r},${m.to.c}`).sort();
 const hasMove = (moves, r, c, prop) => moves.some(m => m.to.r === r && m.to.c === c && (!prop || m[prop]));
+const boardKey = state => state.board.map(r => r.join('')).join('/');
+function stateFrom(board, turn = 'w', castling = { K: false, Q: false, k: false, q: false }, enPassant = null) {
+  return { board: board.map(row => row.split('')), turn, enPassant, castling: { ...castling }, gameOver: false };
+}
+
+test('app module imports successfully with DOM stubs', async () => {
+  const app = await loadApp();
+  try {
+    assert.equal(app.ids.board.children.length, 64);
+    assert.equal(typeof app.api.newGame, 'function');
+  } finally {
+    app.restore();
+  }
+});
 
 test('core move generator covers initial moves, piece movement, blocking, captures, and pinned pieces', () => {
-  const { api } = loadApp();
+  let state = createGameState();
 
-  assert.equal(api.allLegalMoves('w').length, 20);
-  assert.equal(api.allLegalMoves('b').length, 20);
-  assert.deepEqual(destinations(api.legalMovesFor(7, 1)), ['5,0', '5,2']);
-  assert.deepEqual(destinations(api.legalMovesFor(6, 4)), ['4,4', '5,4']);
+  assert.equal(allLegalMoves(state, 'w').length, 20);
+  assert.equal(allLegalMoves(state, 'b').length, 20);
+  assert.deepEqual(destinations(legalMovesFor(state, 7, 1)), ['5,0', '5,2']);
+  assert.deepEqual(destinations(legalMovesFor(state, 6, 4)), ['4,4', '5,4']);
 
-  api.setState({
-    board: [
-      '....k...', '........', '........', '..p.p...',
-      '...B....', '..P.P...', '........', '....K...'
-    ],
-    turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false
-  });
-  assert.deepEqual(destinations(api.pseudoMovesFor(4, 3)), ['3,2', '3,4'], 'bishop can capture enemies but cannot pass through them or own pieces');
+  state = stateFrom([
+    '....k...', '........', '........', '..p.p...',
+    '...B....', '..P.P...', '........', '....K...'
+  ]);
+  assert.deepEqual(destinations(legalMovesFor(state, 4, 3)), ['3,2', '3,4'], 'bishop can capture enemies but cannot pass through them or own pieces');
 
-  api.setState({
-    board: [
-      '....k...', '........', '........', '........',
-      '...Q....', '........', '........', '....K...'
-    ],
-    turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false
-  });
-  assert.ok(hasMove(api.pseudoMovesFor(4, 3), 4, 0), 'queen moves horizontally');
-  assert.ok(hasMove(api.pseudoMovesFor(4, 3), 1, 0), 'queen moves diagonally');
-  api.setState({
-    board: [
-      '....k...', '........', '........', '........',
-      '...R....', '........', '........', '....K...'
-    ],
-    turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false
-  });
-  assert.ok(hasMove(api.pseudoMovesFor(4, 3), 0, 3), 'rook moves vertically');
-  assert.ok(hasMove(api.pseudoMovesFor(4, 3), 4, 7), 'rook moves horizontally');
-  api.setState({
-    board: [
-      '....k...', '........', '........', '........',
-      '........', '........', '........', '...K....'
-    ],
-    turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false
-  });
-  assert.ok(hasMove(api.pseudoMovesFor(7, 3), 6, 4), 'king moves one square');
+  state = stateFrom([
+    '....k...', '........', '........', '........',
+    '...Q....', '........', '........', '....K...'
+  ]);
+  assert.ok(hasMove(legalMovesFor(state, 4, 3), 4, 0), 'queen moves horizontally');
+  assert.ok(hasMove(legalMovesFor(state, 4, 3), 1, 0), 'queen moves diagonally');
+  state = stateFrom([
+    '....k...', '........', '........', '........',
+    '...R....', '........', '........', '....K...'
+  ]);
+  assert.ok(hasMove(legalMovesFor(state, 4, 3), 0, 3), 'rook moves vertically');
+  assert.ok(hasMove(legalMovesFor(state, 4, 3), 4, 7), 'rook moves horizontally');
+  state = stateFrom([
+    '....k...', '........', '........', '........',
+    '........', '........', '........', '...K....'
+  ]);
+  assert.ok(hasMove(legalMovesFor(state, 7, 3), 6, 4), 'king moves one square');
 
-  api.setState({
-    board: [
-      '....r...', '........', '........', '........',
-      '....B...', '........', '........', '....K...'
-    ],
-    turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false
-  });
-  assert.equal(api.legalMovesFor(4, 4).length, 0, 'bishop pinned to king must not be allowed to expose check');
+  state = stateFrom([
+    '....r...', '........', '........', '........',
+    '....B...', '........', '........', '....K...'
+  ]);
+  assert.equal(legalMovesFor(state, 4, 4).length, 0, 'bishop pinned to king must not be allowed to expose check');
 });
 
 test('special rules: promotion, en passant, castling, castling restrictions, and castling rights', () => {
-  const { api } = loadApp();
-
-  api.setState({ board: ['....k...', 'P.......', '........', '........', '........', '........', '.......p', '....K...'], turn: 'w', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
-  let whitePromotion = api.legalMovesFor(1, 0).find(m => m.to.r === 0 && m.to.c === 0);
+  let state = stateFrom(['....k...', 'P.......', '........', '........', '........', '........', '.......p', '....K...']);
+  const whitePromotion = legalMovesFor(state, 1, 0).find(m => m.to.r === 0 && m.to.c === 0);
   assert.equal(whitePromotion.promotion, 'Q');
-  api.makeMove(whitePromotion);
-  assert.equal(api.getState().board[0][0], 'Q');
-  api.setState({ board: ['....k...', '........', '........', '........', '........', '........', '.......p', '....K...'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
-  let blackPromotion = api.legalMovesFor(6, 7).find(m => m.to.r === 7 && m.to.c === 7);
+  makeMove(state, whitePromotion);
+  assert.equal(state.board[0][0], 'Q');
+  state = stateFrom(['....k...', '........', '........', '........', '........', '........', '.......p', '....K...'], 'b');
+  const blackPromotion = legalMovesFor(state, 6, 7).find(m => m.to.r === 7 && m.to.c === 7);
   assert.equal(blackPromotion.promotion, 'q');
 
-  api.setState({ board: ['....k...', '........', '........', '...Pp...', '........', '........', '........', '....K...'], turn: 'w', enPassant: { r: 2, c: 4 }, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
-  const enPassant = api.legalMovesFor(3, 3).find(m => m.enPassant);
+  state = stateFrom(['....k...', '........', '........', '...Pp...', '........', '........', '........', '....K...'], 'w', undefined, { r: 2, c: 4 });
+  const enPassant = legalMovesFor(state, 3, 3).find(m => m.enPassant);
   assert.ok(enPassant);
-  api.makeMove(enPassant);
-  let state = api.getState();
+  makeMove(state, enPassant);
   assert.equal(state.board[2][4], 'P');
   assert.equal(state.board[3][4], '.');
 
-  api.setState({ board: ['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: true, q: true }, selected: null, legalForSelected: [], gameOver: false });
-  assert.ok(hasMove(api.legalMovesFor(7, 4), 7, 6, 'castle'));
-  assert.ok(hasMove(api.legalMovesFor(7, 4), 7, 2, 'castle'));
-  api.makeMove(api.legalMovesFor(7, 4).find(m => m.castle === 'k'));
-  state = api.getState();
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: true, q: true });
+  assert.ok(hasMove(legalMovesFor(state, 7, 4), 7, 6, 'castle'));
+  assert.ok(hasMove(legalMovesFor(state, 7, 4), 7, 2, 'castle'));
+  makeMove(state, legalMovesFor(state, 7, 4).find(m => m.castle === 'k'));
   assert.equal(state.board[7][6], 'K');
   assert.equal(state.board[7][5], 'R');
   assert.equal(state.castling.K, false);
   assert.equal(state.castling.Q, false);
 
-  api.setState({ board: ['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K.NR'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: true, q: true }, selected: null, legalForSelected: [], gameOver: false });
-  assert.equal(hasMove(api.legalMovesFor(7, 4), 7, 6, 'castle'), false, 'blocked castling is illegal');
-  api.setState({ board: ['....k...', '........', '........', '........', '.....r..', '........', '........', 'R...K..R'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
-  assert.equal(hasMove(api.legalMovesFor(7, 4), 7, 6, 'castle'), false, 'cannot castle through attacked square');
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K.NR'], 'w', { K: true, Q: true, k: true, q: true });
+  assert.equal(hasMove(legalMovesFor(state, 7, 4), 7, 6, 'castle'), false, 'blocked castling is illegal');
+  state = stateFrom(['....k...', '........', '........', '........', '.....r..', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: false, q: false });
+  assert.equal(hasMove(legalMovesFor(state, 7, 4), 7, 6, 'castle'), false, 'cannot castle through attacked square');
 
-  api.setState({ board: ['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: true, q: true }, selected: null, legalForSelected: [], gameOver: false });
-  api.makeMove({ from: { r: 7, c: 0 }, to: { r: 7, c: 1 } });
-  assert.equal(api.getState().castling.Q, false);
-  api.setState({ board: ['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], turn: 'w', enPassant: null, castling: { K: true, Q: true, k: true, q: true }, selected: null, legalForSelected: [], gameOver: false });
-  api.makeMove({ from: { r: 7, c: 7 }, to: { r: 0, c: 7 } });
-  assert.equal(api.getState().castling.k, false, 'capturing rook revokes opponent castling right');
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: true, q: true });
+  makeMove(state, { from: { r: 7, c: 0 }, to: { r: 7, c: 1 } });
+  assert.equal(state.castling.Q, false);
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: true, q: true });
+  makeMove(state, { from: { r: 7, c: 7 }, to: { r: 0, c: 7 } });
+  assert.equal(state.castling.k, false, 'capturing rook revokes opponent castling right');
 });
 
-test('bot turn is deterministic under fake timers/random and only makes legal moves', () => {
+test('castling is unavailable when rights are true but the rook is missing or replaced', () => {
+  for (const { name, board, color, king, missingTo, replacedBoard, replacedTo } of [
+    { name: 'white king-side', board: ['....k...', '........', '........', '........', '........', '........', '........', 'R...K...'], replacedBoard: ['....k...', '........', '........', '........', '........', '........', '........', 'R...K..N'], color: 'w', king: [7, 4], missingTo: [7, 6], replacedTo: [7, 6] },
+    { name: 'white queen-side', board: ['....k...', '........', '........', '........', '........', '........', '........', '....K..R'], replacedBoard: ['....k...', '........', '........', '........', '........', '........', '........', 'N...K..R'], color: 'w', king: [7, 4], missingTo: [7, 2], replacedTo: [7, 2] },
+    { name: 'black king-side', board: ['r...k...', '........', '........', '........', '........', '........', '........', '....K...'], replacedBoard: ['r...k..n', '........', '........', '........', '........', '........', '........', '....K...'], color: 'b', king: [0, 4], missingTo: [0, 6], replacedTo: [0, 6] },
+    { name: 'black queen-side', board: ['....k..r', '........', '........', '........', '........', '........', '........', '....K...'], replacedBoard: ['n...k..r', '........', '........', '........', '........', '........', '........', '....K...'], color: 'b', king: [0, 4], missingTo: [0, 2], replacedTo: [0, 2] }
+  ]) {
+    let state = stateFrom(board, color, { K: true, Q: true, k: true, q: true });
+    assert.equal(hasMove(legalMovesFor(state, ...king), ...missingTo, 'castle'), false, `${name} cannot castle without rook`);
+    state = stateFrom(replacedBoard, color, { K: true, Q: true, k: true, q: true });
+    assert.equal(hasMove(legalMovesFor(state, ...king), ...replacedTo, 'castle'), false, `${name} cannot castle with non-rook corner piece`);
+  }
+});
+
+test('bot turn is deterministic under fake timers/random and only makes legal moves', async () => {
   const randomValues = [0.99, 0.99, 0.99, 0.99, 0.99, 0.99, 0, 0];
-  const { api, ids, timers } = loadApp({ random: () => randomValues.shift() ?? 0.99 });
-  ids.chaos.checked = false;
-  api.render();
-  ids.board.children.find(sq => sq.dataset.r === 6 && sq.dataset.c === 4).click();
-  ids.board.children.find(sq => sq.dataset.r === 4 && sq.dataset.c === 4).click();
+  const app = await loadApp({ random: () => randomValues.shift() ?? 0.99 });
+  try {
+    app.ids.chaos.checked = false;
+    app.api.render();
+    app.ids.board.children.find(sq => sq.dataset.r === 6 && sq.dataset.c === 4).click();
+    app.ids.board.children.find(sq => sq.dataset.r === 4 && sq.dataset.c === 4).click();
 
-  assert.equal(api.getState().turn, 'b');
-  assert.equal(timers.length, 1);
-  assert.match(ids.status.textContent, /Bot thinking/);
-  const beforeBot = api.getState().board.map(r => r.join('')).join('/');
-  timers[0].fn();
-  const afterBot = api.getState();
-  assert.equal(afterBot.turn, 'w');
-  assert.notEqual(afterBot.board.map(r => r.join('')).join('/'), beforeBot);
-  assert.match(ids.status.textContent, /Your move|CHECK/);
+    assert.equal(app.api.getState().turn, 'b');
+    assert.equal(app.timers.length, 1);
+    assert.match(app.ids.status.textContent, /Bot thinking/);
+    const beforeBot = boardKey(app.api.getState());
+    app.timers[0].fn();
+    const afterBot = app.api.getState();
+    assert.equal(afterBot.turn, 'w');
+    assert.notEqual(boardKey(afterBot), beforeBot);
+    assert.match(app.ids.status.textContent, /Your move|CHECK/);
 
-  api.setState({ board: ['....k...', '........', '........', '........', '........', '........', '........', '....K...'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: true });
-  const locked = api.getState().board.map(r => r.join('')).join('/');
-  api.botMove();
-  assert.equal(api.getState().board.map(r => r.join('')).join('/'), locked);
+    app.api.setState({ board: ['....k...', '........', '........', '........', '........', '........', '........', '....K...'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: true });
+    const locked = boardKey(app.api.getState());
+    app.api.botMove();
+    assert.equal(boardKey(app.api.getState()), locked);
+  } finally {
+    app.restore();
+  }
 });
 
-test('checkmate and stalemate set game over and block further clicks', () => {
-  const { api, ids } = loadApp();
-  ids.chaos.checked = false;
+test('checkmate and stalemate set game over and block further clicks', async () => {
+  const app = await loadApp();
+  try {
+    app.ids.chaos.checked = false;
 
-  api.setState({ board: ['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
-  assert.equal(api.checkGameEnd(), true);
-  assert.match(ids.status.textContent, /checkmated/);
-  assert.equal(api.getState().gameOver, true);
-  const before = api.getState().board.map(r => r.join('')).join('/');
-  api.render();
-  ids.board.children.find(sq => sq.dataset.r === 1 && sq.dataset.c === 1).click();
-  assert.equal(api.getState().board.map(r => r.join('')).join('/'), before);
+    app.api.setState({ board: ['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
+    assert.equal(app.api.checkGameEnd(), true);
+    assert.match(app.ids.status.textContent, /checkmated/);
+    assert.equal(app.api.getState().gameOver, true);
+    const before = boardKey(app.api.getState());
+    app.api.render();
+    app.ids.board.children.find(sq => sq.dataset.r === 1 && sq.dataset.c === 1).click();
+    assert.equal(boardKey(app.api.getState()), before);
 
-  api.setState({ board: ['k.......', '..Q.....', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
-  assert.equal(api.checkGameEnd(), true);
-  assert.match(ids.status.textContent, /Stalemate/);
+    app.api.setState({ board: ['k.......', '..Q.....', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: false });
+    assert.equal(app.api.checkGameEnd(), true);
+    assert.match(app.ids.status.textContent, /Stalemate/);
+  } finally {
+    app.restore();
+  }
 });
 
-test('rendering and click-selection UI behavior is covered, including chaos glitches', () => {
+test('rendering and click-selection UI behavior is covered, including chaos glitches', async () => {
   const randomValues = [0.01, 0.99, 0.99, 0.99, 0.99, 0.99];
-  const { api, ids } = loadApp({ random: () => randomValues.shift() ?? 0.99 });
-  assert.equal(ids.board.children.length, 64);
-  assert.match(ids.board.children[0].innerHTML, /♜/);
-  assert.ok(ids.board.children.some(sq => sq.classList.contains('glitch')));
+  const app = await loadApp({ random: () => randomValues.shift() ?? 0.99 });
+  try {
+    assert.equal(app.ids.board.children.length, 64);
+    assert.match(app.ids.board.children[0].innerHTML, /♜/);
+    assert.ok(app.ids.board.children.some(sq => sq.classList.contains('glitch')));
 
-  ids.chaos.checked = false;
-  api.newGame();
-  const blackRook = ids.board.children.find(sq => sq.dataset.r === 0 && sq.dataset.c === 0);
-  blackRook.click();
-  assert.match(ids.status.textContent, /not your piece/);
+    app.ids.chaos.checked = false;
+    app.api.newGame();
+    const blackRook = app.ids.board.children.find(sq => sq.dataset.r === 0 && sq.dataset.c === 0);
+    blackRook.click();
+    assert.match(app.ids.status.textContent, /not your piece/);
 
-  const whiteKnight = ids.board.children.find(sq => sq.dataset.r === 7 && sq.dataset.c === 1);
-  whiteKnight.click();
-  assert.match(ids.status.textContent, /♘ selected/);
-  assert.ok(ids.board.children.find(sq => sq.dataset.r === 7 && sq.dataset.c === 1).classList.contains('selected'));
-  assert.equal(ids.board.children.filter(sq => sq.classList.contains('legal')).length, 2);
+    const whiteKnight = app.ids.board.children.find(sq => sq.dataset.r === 7 && sq.dataset.c === 1);
+    whiteKnight.click();
+    assert.match(app.ids.status.textContent, /♘ selected/);
+    assert.ok(app.ids.board.children.find(sq => sq.dataset.r === 7 && sq.dataset.c === 1).classList.contains('selected'));
+    assert.equal(app.ids.board.children.filter(sq => sq.classList.contains('legal')).length, 2);
+  } finally {
+    app.restore();
+  }
+});
+
+test('noise button wires Web Audio oscillator and gain settings', async () => {
+  const random = () => 0.5;
+  const app = await loadApp({ random });
+  try {
+    app.ids.noiseBtn.click();
+    const calls = app.audio.calls;
+    assert.equal(app.audio.oscillators[0].type, 'square');
+    assert.equal(app.audio.oscillators[0].frequency.value, 610);
+    assert.equal(app.audio.gains[0].gain.value, 0.05);
+    assert.equal(calls[0][0], 'osc.connect');
+    assert.equal(calls[1][0], 'gain.connect');
+    assert.deepEqual(calls.slice(2), [['osc.start'], ['osc.stop', 10.15]]);
+  } finally {
+    app.restore();
+  }
+});
+
+test('playBadNoise documents missing Web Audio support by throwing', () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = {};
+  try {
+    assert.throws(() => playBadNoise(), TypeError);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('playBadNoise documents AudioContext constructor errors by propagating them', () => {
+  const originalWindow = globalThis.window;
+  const err = new Error('blocked audio');
+  globalThis.window = { AudioContext: function AudioContext() { throw err; } };
+  try {
+    assert.throws(() => playBadNoise(), err);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('makeBadBotMove returns false and leaves state unchanged when black has no moves', () => {
+  const state = stateFrom(['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], 'b');
+  checkGameEnd(state);
+  const before = boardKey(state);
+  assert.equal(makeBadBotMove(state), false);
+  assert.equal(boardKey(state), before);
+});
+
+test('makeBadBotMove returns true and uses pawn-biased branch with controlled random', () => {
+  const state = createGameState();
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    assert.equal(makeBadBotMove(state), true);
+  } finally {
+    Math.random = originalRandom;
+  }
+  assert.equal(state.board[2][0], 'p', 'first black pawn double-moves when pawn-biased branch picks first pawn move');
+  assert.equal(state.board[1][0], '.');
+});
+
+test('makeBadBotMove can use fallback all-moves branch with controlled random', () => {
+  const state = createGameState();
+  const originalRandom = Math.random;
+  const values = [0.99, 0.99];
+  Math.random = () => values.shift() ?? 0.99;
+  try {
+    assert.equal(makeBadBotMove(state), true);
+  } finally {
+    Math.random = originalRandom;
+  }
+  assert.notEqual(boardKey(state), boardKey(createGameState()), 'some legal black move was made from all-moves pool');
+});
+
+function commandExists(cmd) {
+  return spawnSync('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }).status === 0;
+}
+
+function httpGet(path) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port: 8080, path, timeout: 1000 }, res => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { body += chunk; });
+      res.on('end', () => resolve({ statusCode: res.statusCode, body }));
+    });
+    req.on('timeout', () => req.destroy(new Error('HTTP request timed out')));
+    req.on('error', reject);
+  });
+}
+
+async function waitForHttp(path, attempts = 20) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await httpGet(path);
+    } catch (err) {
+      lastErr = err;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+  throw lastErr;
+}
+
+test('Docker Compose serves the app over HTTP', { skip: !commandExists('docker') }, async t => {
+  execFileSync('docker', ['compose', 'config'], { stdio: 'pipe' });
+  const up = spawnSync('docker', ['compose', 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
+  if (up.status !== 0) {
+    t.skip(`docker compose up failed: ${up.stderr || up.stdout}`);
+    return;
+  }
+  t.after(() => {
+    spawnSync('docker', ['compose', 'down'], { stdio: 'ignore' });
+  });
+
+  const index = await waitForHttp('/');
+  assert.equal(index.statusCode, 200);
+  assert.match(index.body, /<script type="module" src="app\.js"><\/script>/);
+
+  const appJs = await waitForHttp('/app.js');
+  assert.equal(appJs.statusCode, 200);
+  assert.match(appJs.body, /import .*\.\/chess-engine\.js/);
 });

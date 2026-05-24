@@ -133,10 +133,11 @@ function kingMoves(state, r, c, color) {
   const kFlag = color === 'w' ? 'K' : 'k';
   const qFlag = color === 'w' ? 'Q' : 'q';
   const attackedBy = enemy(color);
-  if (state.castling[kFlag] && pieceAt(state, home, 5) === '.' && pieceAt(state, home, 6) === '.' && !squareAttacked(state.board, home, 5, attackedBy) && !squareAttacked(state.board, home, 6, attackedBy)) {
+  const rook = color === 'w' ? 'R' : 'r';
+  if (state.castling[kFlag] && pieceAt(state, home, 7) === rook && pieceAt(state, home, 5) === '.' && pieceAt(state, home, 6) === '.' && !squareAttacked(state.board, home, 5, attackedBy) && !squareAttacked(state.board, home, 6, attackedBy)) {
     moves.push(createMove(r, c, home, 6, { castle: 'k' }));
   }
-  if (state.castling[qFlag] && pieceAt(state, home, 1) === '.' && pieceAt(state, home, 2) === '.' && pieceAt(state, home, 3) === '.' && !squareAttacked(state.board, home, 3, attackedBy) && !squareAttacked(state.board, home, 2, attackedBy)) {
+  if (state.castling[qFlag] && pieceAt(state, home, 0) === rook && pieceAt(state, home, 1) === '.' && pieceAt(state, home, 2) === '.' && pieceAt(state, home, 3) === '.' && !squareAttacked(state.board, home, 3, attackedBy) && !squareAttacked(state.board, home, 2, attackedBy)) {
     moves.push(createMove(r, c, home, 2, { castle: 'q' }));
   }
   return moves;
