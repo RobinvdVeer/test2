@@ -21,7 +21,7 @@ Do not open `public/index.html` directly with a `file://` URL. The app uses ES m
 The buildable service is named `app` in `docker-compose.yml`. Its image target is:
 
 ```text
-ghcr.io/pi/really-bad-chess-web-app
+ghcr.io/robinvdveer/really-bad-chess-web-app
 ```
 
 For local image verification, use Docker Compose:
@@ -107,6 +107,18 @@ These helpers mutate plain JavaScript state where noted below. Prefer imports fr
 
 `window.__badChess`, `createGameController`, `getGameControllerDebugApi`, `createDomBoardView`, `playBadNoise`, and the controller/view/audio modules are internal implementation details. They exist for the app and tests, are not compatibility-stable, and should not be used by application code.
 
+The root-level `game-controller.js` module additionally exposes a legacy test harness wrapper around the browser controller, including state setters/getters and move helpers. Treat that surface as test-only compatibility API: it may change without notice and should not be used by application code. Prefer the documented browser API and `public/` helper modules instead.
+
+Example legacy test-only use:
+
+```js
+import { createGameController } from './game-controller.js';
+
+const controller = createGameController({ view: fakeView, setTimeoutFn: fakeTimer });
+controller.setState({ turn: 'b' });
+console.log(controller.getState().turn);
+```
+
 ## Configuration
 
 Maintainers can tune the badness in `public/app.js` using the named constants near the top of the file:
@@ -178,9 +190,18 @@ console.log(getGameEnd(state));
 
 State shape and conventions:
 
+- Start from `createGameState()` when possible so all required fields are present.
 - `state.board` is an 8x8 array addressed as `board[row][column]`, with row `0` at Black's back rank and row `7` at White's back rank.
+- `state.turn` is the side to move, either `'w'` or `'b'`.
+- `state.enPassant` is either `null` or an en-passant target square `{ r, c }`.
+- `state.castling` tracks castling rights with boolean flags `{ K, Q, k, q }` for White king-side, White queen-side, Black king-side, and Black queen-side.
+- `state.gameOver` is a boolean set by mutating game-end helpers.
 - Pieces use FEN-like letters: uppercase `KQRBNP` for White, lowercase `kqrbnp` for Black, and `.` for an empty square.
 - Colors are `'w'` and `'b'`.
-- Moves have `{ from: { r, c }, to: { r, c } }` plus optional flags such as `promotion`, `doublePawn`, `enPassant`, or `castle`.
+- Moves have `{ from: { r, c }, to: { r, c } }` plus optional flags:
+  - `promotion: 'Q' | 'q'` replaces the moved pawn with the promoted queen.
+  - `doublePawn: true` marks a two-square pawn move and updates `state.enPassant`.
+  - `enPassant: true` captures the pawn behind the destination square.
+  - `castle: 'k' | 'q'` moves the rook for king-side or queen-side castling.
 - `makeMove(state, move)` mutates `state.board`, castling rights, and en-passant state. It does not advance `state.turn`; callers do that themselves.
 - `getGameEnd(state)` is pure. `checkGameEnd(state)` / `markGameOverIfNeeded(state)` may set `state.gameOver`.
