@@ -255,4 +255,46 @@ document.getElementById('noiseBtn').addEventListener('click', () => {
   osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + 0.15);
 });
 chaosEl.addEventListener('change', render);
+
+if (typeof window !== 'undefined') {
+  window.__badChess = {
+    newGame,
+    render,
+    onSquareClick,
+    afterMove,
+    botMove,
+    allLegalMoves,
+    legalMovesFor,
+    pseudoMovesFor,
+    makeMove,
+    applyMoveTo,
+    checkGameEnd,
+    inCheck,
+    isInCheck,
+    squareAttacked,
+    attacksSquare,
+    colorOf,
+    setState(next = {}) {
+      if (next.board) board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
+      if ('turn' in next) turn = next.turn;
+      if ('selected' in next) selected = next.selected;
+      if ('legalForSelected' in next) legalForSelected = next.legalForSelected;
+      if ('enPassant' in next) enPassant = next.enPassant;
+      if ('castling' in next) castling = { ...next.castling };
+      if ('gameOver' in next) gameOver = next.gameOver;
+    },
+    getState() {
+      return {
+        board: clone(),
+        turn,
+        selected,
+        legalForSelected: legalForSelected.slice(),
+        enPassant,
+        castling: { ...castling },
+        gameOver
+      };
+    }
+  };
+}
+
 newGame();
