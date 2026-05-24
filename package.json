@@ -1,0 +1,10 @@
+{
+  "name": "really-bad-chess-web-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check app.js && node --check chess-engine.js && node --check bot.js && node --check audio.js",
+    "test": "node --test"
+  }
+}
