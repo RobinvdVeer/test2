@@ -9,10 +9,11 @@ import {
   getGameEnd,
   inCheck,
   legalMovesFor,
+  markGameOverIfNeeded,
   makeMove,
   pseudoMovesFor
 } from '../public/chess-engine.js';
-import { makeBadBotMove } from '../bot.js';
+import { chooseBadBotMove, makeBadBotMove } from '../public/bot.js';
 import { playBadNoise } from '../public/audio.js';
 
 let importCounter = 0;
@@ -108,12 +109,14 @@ async function loadApp({ random = () => 0.99, audioContext } = {}) {
   const originalClearTimeout = globalThis.clearTimeout;
   const originalAudioContext = globalThis.AudioContext;
   const originalWebkitAudioContext = globalThis.webkitAudioContext;
+  const originalTestHooksFlag = globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
   const recorder = audioContext || createAudioContextRecorder();
 
   globalThis.document = document;
   globalThis.window = globalThis;
   globalThis.AudioContext = recorder.AudioContext;
   globalThis.webkitAudioContext = recorder.AudioContext;
+  globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = true;
   Math.random = random;
   globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
   globalThis.clearTimeout = () => {};
@@ -128,10 +131,12 @@ async function loadApp({ random = () => 0.99, audioContext } = {}) {
     else globalThis.AudioContext = originalAudioContext;
     if (originalWebkitAudioContext === undefined) delete globalThis.webkitAudioContext;
     else globalThis.webkitAudioContext = originalWebkitAudioContext;
+    if (originalTestHooksFlag === undefined) delete globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
+    else globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = originalTestHooksFlag;
   };
 
   try {
-    await import(`../app.js?test=${importCounter++}`);
+    await import(`../public/app.js?test=${importCounter++}`);
   } catch (err) {
     restore();
     throw err;
@@ -158,6 +163,7 @@ function stateFrom(boardOrNext, turn = 'w', castling = { K: false, Q: false, k: 
 const destinations = moves => moves.map(m => `${m.to.r},${m.to.c}`).sort();
 const hasMove = (moves, r, c, prop) => moves.some(m => m.to.r === r && m.to.c === c && (!prop || m[prop]));
 const boardKey = state => state.board.map(r => r.join('')).join('/');
+const applyMoveForTest = (state, move) => { makeMove(state, move); return state; };
 const squareAt = (ids, r, c) => ids.board.children.find(sq => Number(sq.dataset.r) === r && Number(sq.dataset.c) === c);
 
 test('app module imports successfully with DOM stubs', async () => {
@@ -270,6 +276,21 @@ test('game-end evaluation is pure', () => {
   const result = getGameEnd(state);
   assert.deepEqual(result, { over: true, checkmate: true, color: 'b' });
   assert.equal(state.gameOver, false, 'getGameEnd must not mutate state');
+});
+
+test('markGameOverIfNeeded mutates only when the game is over', () => {
+  let state = stateFrom(['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], 'b');
+  assert.deepEqual(markGameOverIfNeeded(state), { over: true, checkmate: true, color: 'b' });
+  assert.equal(state.gameOver, true, 'checkmate marks game over');
+
+  state = stateFrom(['k.......', '..Q.....', 'K.......', '........', '........', '........', '........', '........'], 'b');
+  assert.deepEqual(markGameOverIfNeeded(state), { over: true, checkmate: false, color: 'b' });
+  assert.equal(state.gameOver, true, 'stalemate marks game over');
+
+  state = createGameState();
+  const result = markGameOverIfNeeded(state);
+  assert.equal(result.over, false);
+  assert.equal(state.gameOver, false, 'ongoing games are not marked over');
 });
 
 test('bot is deterministic with injected random and only makes legal moves', () => {
@@ -393,8 +414,28 @@ test('makeBadBotMove returns true and uses pawn-biased branch with controlled ra
   assert.equal(state.board[1][0], '.');
 });
 
+test('chooseBadBotMove uses pawn bias, fallback, no-pawn fallback, and bias precedence', () => {
+  const state = stateFrom(['....k...', 'p.......', '........', '........', '........', '........', '........', '....K.n.'], 'b');
+  const nonPawnMove = { from: { r: 7, c: 6 }, to: { r: 5, c: 5 } };
+  const pawnMove = { from: { r: 1, c: 0 }, to: { r: 2, c: 0 } };
+  const moves = [nonPawnMove, pawnMove];
+
+  let values = [0, 0];
+  assert.equal(chooseBadBotMove(state, { moves, pawnBias: 1, random: () => values.shift() ?? 0 }), pawnMove, 'pawn-biased branch picks from pawn moves');
+
+  values = [0.99, 0];
+  assert.equal(chooseBadBotMove(state, { moves, pawnBias: 0.7, random: () => values.shift() ?? 0 }), nonPawnMove, 'fallback branch picks from all moves');
+
+  values = [0, 0];
+  assert.equal(chooseBadBotMove(state, { moves: [nonPawnMove], pawnBias: 1, random: () => values.shift() ?? 0 }), nonPawnMove, 'no-pawn move list falls back to all moves');
+
+  values = [0, 0];
+  assert.equal(chooseBadBotMove(state, { moves, pawnBias: 0, pawnMoveBias: 1, random: () => values.shift() ?? 0 }), nonPawnMove, 'pawnBias overrides pawnMoveBias');
+});
+
 test('makeBadBotMove can use fallback all-moves branch with controlled random', () => {
   const state = createGameState();
+  const before = boardKey(state);
   const originalRandom = Math.random;
   const values = [0.99, 0.99];
   Math.random = () => values.shift() ?? 0.99;
@@ -403,7 +444,8 @@ test('makeBadBotMove can use fallback all-moves branch with controlled random', 
   } finally {
     Math.random = originalRandom;
   }
-  assert.notEqual(boardKey(state), boardKey(createGameState()), 'some legal black move was made from all-moves pool');
+  assert.notEqual(boardKey(state), before, 'some legal black move was made from all-moves pool');
+  assert.equal(allLegalMoves(createGameState(), 'b').some(move => boardKey(applyMoveForTest(createGameState(), move)) === boardKey(state)), true, 'result matches one legal black move');
 });
 
 test('playBadNoise documents missing Web Audio support by throwing', async () => {
@@ -474,7 +516,19 @@ test('Docker Compose serves the app over HTTP', { skip: !commandExists('docker')
   assert.equal(index.statusCode, 200);
   assert.match(index.body, /<script type="module" src="app\.js"><\/script>/);
 
-  const appJs = await waitForHttp('/app.js');
-  assert.equal(appJs.statusCode, 200);
-  assert.match(appJs.body, /import .*\.\/game-controller\.js/);
+  const modules = [
+    ['/app.js', /import .*\.\/game-controller\.js/],
+    ['/board-view.js', /export function createDomBoardView/],
+    ['/game-controller.js', /export function createGameController/],
+    ['/bot.js', /export function makeBadBotMove/],
+    ['/piece-symbols.js', /export const PIECES/],
+    ['/chess-engine.js', /export function createGameState/],
+    ['/audio.js', /export function playBadNoise/]
+  ];
+
+  for (const [path, expected] of modules) {
+    const response = await waitForHttp(path);
+    assert.equal(response.statusCode, 200, `${path} is served`);
+    assert.match(response.body, expected, `${path} has expected JavaScript content`);
+  }
 });

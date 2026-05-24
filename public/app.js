@@ -1,5 +1,5 @@
 import { createDomBoardView } from './board-view.js';
-import { createGameController } from './game-controller.js';
+import { createGameController, getGameControllerDebugApi } from './game-controller.js';
 import { playBadNoise } from './audio.js';
 
 // Configuration knobs for maintainers who want to tune the badness without spelunking.
@@ -18,7 +18,7 @@ let controller;
 const view = createDomBoardView({
   boardEl,
   statusEl,
-  chaosEl,
+  documentRef: document,
   onSquareClick: (r, c) => controller.selectSquare(r, c),
   glitch: {
     probability: GLITCH_PROBABILITY,
@@ -29,14 +29,16 @@ const view = createDomBoardView({
 
 controller = createGameController({
   view,
+  chaosEnabled: () => chaosEl.checked,
   config: {
-    botPawnMoveBias: BOT_PAWN_MOVE_BIAS,
+    pawnMoveBias: BOT_PAWN_MOVE_BIAS,
     botMinDelayMs: BOT_MIN_DELAY_MS,
     botMaxDelayMs: BOT_MAX_DELAY_MS
   }
 });
 
 window.BadChess = { newGame: controller.newGame };
+if (window.__BAD_CHESS_ENABLE_TEST_HOOKS__) window.__badChess = getGameControllerDebugApi(controller);
 
 document.getElementById('newGame').addEventListener('click', controller.newGame);
 document.getElementById('noiseBtn').addEventListener('click', playBadNoise);
