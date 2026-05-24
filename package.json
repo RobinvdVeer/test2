@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check app.js && node --check chess-engine.js && node --check bot.js && node --check audio.js",
+    "check": "node --check public/app.js && node --check public/chess-engine.js && node --check bot.js && node --check public/audio.js",
     "test": "node --test"
   }
 }

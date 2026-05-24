@@ -2,7 +2,7 @@ services:
   web:
     image: nginx:1.27-alpine
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     volumes:
-      - ./:/usr/share/nginx/html:ro
+      - ./public:/usr/share/nginx/html:ro
     restart: unless-stopped
