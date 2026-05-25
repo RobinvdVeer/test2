@@ -101,10 +101,10 @@ function wireEvents(documentRef, windowRef, elements, controller, appStateManage
   });
   elements.playerNameEl?.addEventListener('input', () => {
     appStateManager.updatePlayerName(elements.playerNameEl.value);
-    appStateManager.persistState();
+    appStateManager.schedulePersistState();
   });
   elements.resetSavedGameEl?.addEventListener('click', appStateManager.resetSavedGame);
-  windowRef.addEventListener?.('beforeunload', appStateManager.persistState);
+  windowRef.addEventListener?.('beforeunload', appStateManager.flushPersistState);
 }
 
 function loadSafePersistedState() {

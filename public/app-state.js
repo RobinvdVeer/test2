@@ -1,12 +1,15 @@
 import { defaultAppState, calculateScore, currentTimer, elapsedMs, formatDuration } from './game-metrics.js';
 import { clearPersistedState, savePersistedState } from './game-persistence.js';
 
+const PERSIST_DEBOUNCE_MS = 250;
+
 export function createAppStateManager({ initialAppState = defaultAppState(), elements }) {
   const { playerNameEl, scoreEl, timerEl } = elements;
   let appState = initialAppState;
   let controller = null;
   let isRestoring = false;
   let lastPersistedPayload = null;
+  let pendingPersistTimer = null;
 
   function setController(nextController) {
     controller = nextController;
@@ -30,7 +33,27 @@ export function createAppStateManager({ initialAppState = defaultAppState(), ele
     }
   }
 
+  function schedulePersistState() {
+    if (pendingPersistTimer) clearTimeout(pendingPersistTimer);
+    pendingPersistTimer = setTimeout(() => {
+      pendingPersistTimer = null;
+      persistState();
+    }, PERSIST_DEBOUNCE_MS);
+  }
+
+  function flushPersistState() {
+    if (pendingPersistTimer) {
+      clearTimeout(pendingPersistTimer);
+      pendingPersistTimer = null;
+    }
+    persistState();
+  }
+
   function persistState() {
+    if (pendingPersistTimer) {
+      clearTimeout(pendingPersistTimer);
+      pendingPersistTimer = null;
+    }
     if (!controller?.getState) return;
     const game = controller.getState();
     appState.playerName = playerNameEl?.value || appState.playerName || '';
@@ -46,6 +69,10 @@ export function createAppStateManager({ initialAppState = defaultAppState(), ele
   }
 
   function resetSavedGame() {
+    if (pendingPersistTimer) {
+      clearTimeout(pendingPersistTimer);
+      pendingPersistTimer = null;
+    }
     clearPersistedState();
     lastPersistedPayload = null;
     appState = defaultAppState({ playerName: playerNameEl?.value || '' });
@@ -80,6 +107,8 @@ export function createAppStateManager({ initialAppState = defaultAppState(), ele
     onControllerStateChange,
     runWithoutPersistence,
     persistState,
+    schedulePersistState,
+    flushPersistState,
     resetSavedGame,
     replaceWithNewGameState,
     updatePlayerName,
