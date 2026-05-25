@@ -21,7 +21,7 @@ Do not open `public/index.html` directly with a `file://` URL. The app uses ES m
 The buildable service is named `app` in `docker-compose.yml`. Its image target is:
 
 ```text
-ghcr.io/pi/really-bad-chess-web-app
+ghcr.io/robinvdveer/really-bad-chess-web-app
 ```
 
 For local image verification, use Docker Compose:
@@ -47,6 +47,19 @@ helm upgrade --install really-bad-chess ./deploy/chart \
 
 `image.app.tag` is expected to be supplied by the deployment pipeline, such as `pi_deploy`, when promoting a built GHCR image.
 
+The base Helm chart exposes the app with a `NodePort` Service. To see the assigned port on a local cluster:
+
+```sh
+kubectl get svc really-bad-chess-really-bad-chess-web-app
+```
+
+To pin a port instead of using an auto-assigned one, set a valid NodePort for your cluster, commonly in the `30000-32767` range:
+
+```sh
+helm upgrade --install really-bad-chess ./deploy/chart \
+  --set service.nodePort=30080
+```
+
 ## Check
 
 Run `npm run check` to syntax-check the JavaScript modules.
@@ -61,7 +74,14 @@ Run `npm test` to execute the Node.js test suite.
 2. Click one of your White pieces to select it.
 3. Click a highlighted destination square to move there.
 4. Wait briefly while the Black bot thinks very incorrectly and makes a move.
-5. Use `NEW GAME BUT WORSE` to reset, `click 4 noise` for a tiny beep, and the `random layout glitches` checkbox to toggle visual chaos.
+5. Optionally enter your name; the app tracks a simple material score and elapsed timer.
+6. Use `NEW GAME BUT WORSE` to start a fresh game, `RESET SAVED GAME` to clear the browser save, `click 4 noise` for a tiny beep, and the `random layout glitches` checkbox to toggle visual chaos.
+
+## Game state persistence
+
+The browser app saves game state to `localStorage` under `bad-chess-2000:game-state:v1` and restores it on reload. The saved payload includes the board/game state, player name, material score, timer, and visual-chaos setting.
+
+Saved state is only cleared by the explicit `RESET SAVED GAME` control or by calling `window.BadChess.resetSavedGame()`. Starting a new game replaces the saved game with the new one; completing a game does not automatically clear the save.
 
 ## Features
 
@@ -73,7 +93,7 @@ Run `npm test` to execute the Node.js test suite.
 
 - The human player is always White, and the bot is always Black.
 - Pawn promotion always becomes a queen; there is no promotion picker.
-- There is no save, move history, undo, multiplayer, backend, or public API beyond `window.BadChess.newGame()`.
+- There is local browser save/restore, but no move history, undo, multiplayer, or backend.
 - Test/debug hooks are disabled by default; `window.__badChess` is internal, unsupported, and should not be used by application code.
 
 ## Source layout
@@ -90,9 +110,10 @@ The supported browser API is intentionally tiny:
 
 ```js
 window.BadChess.newGame();
+window.BadChess.resetSavedGame();
 ```
 
-That resets the visible game. This is the only stable application API exposed on `window.BadChess`.
+`newGame()` starts a fresh visible game and persists it. `resetSavedGame()` clears the `localStorage` save and starts/persists a fresh game. These are the only stable application APIs exposed on `window.BadChess`.
 
 ### Experimental helper modules
 
@@ -100,12 +121,41 @@ The following `public/` modules are supported for tests and small experiments, b
 
 - `public/chess-engine.js`: `createGameState`, `colorOf`, `enemy`, `inCheck`, `allLegalMoves`, `legalMovesFor`, `pseudoMovesFor`, `makeMove`, `getGameEnd`, `markGameOverIfNeeded`, and `checkGameEnd`.
 - `public/bot.js`: `chooseBadBotMove` and `makeBadBotMove`.
+- `public/game-controller.js`: `createGameController` and `createGameControllerSession` for app/test controller experiments.
 
 These helpers mutate plain JavaScript state where noted below. Prefer imports from `public/`, not root-level legacy files.
 
+### Experimental controller session API
+
+`createGameControllerSession(options)` returns `{ controller, internals }`. The `internals` object is for tests only; application experiments should use `controller`.
+
+Required option:
+
+- `view`: object with `render(game, renderOptions)` and `setStatus(status)` methods.
+
+Optional options:
+
+- `random`: random-number function for deterministic bot behavior. Defaults to `Math.random`.
+- `setTimeoutFn`: timer function used for bot delays. Defaults to `setTimeout`.
+- `chaosEnabled`: function returning whether visual chaos should be rendered. Defaults to `() => false`.
+- `onStateChange`: callback invoked after `render()` with `controller.getState()`; used by the browser app to persist state.
+- `config.pawnMoveBias`: bot pawn-move preference probability. `config.botPawnMoveBias` is a compatibility alias.
+- `config.botMinDelayMs` / `config.botMaxDelayMs`: bot thinking-delay range in milliseconds.
+
+Controller methods:
+
+- `newGame()` starts a fresh game and renders it.
+- `selectSquare(row, column)` handles a user selection/move for White.
+- `render()` redraws the current state and triggers `onStateChange`.
+- `getState()` returns a serializable snapshot with board, turn, selected square, legal moves, en-passant state, castling rights, and game-over flag.
+- `setState(snapshot)` restores those fields and renders.
+- `botMove(cachedMoves)` makes a Black bot move, optionally using precomputed legal moves.
+
+This controller API is experimental and may change between app versions.
+
 ### Internal-only APIs
 
-`window.__badChess`, `createGameController`, `getGameControllerDebugApi`, `createDomBoardView`, `playBadNoise`, and the controller/view/audio modules are internal implementation details. They exist for the app and tests, are not compatibility-stable, and should not be used by application code.
+`window.__badChess`, `createDebuggableGameController`, `createDomBoardView`, `playBadNoise`, and the debug/view/audio modules are internal implementation details. They exist for the app and tests, are not compatibility-stable, and should not be used by application code.
 
 ## Configuration
 
@@ -116,6 +166,7 @@ Maintainers can tune the badness in `public/app.js` using the named constants ne
 - `GLITCH_MAX_ROTATION_DEG` controls the maximum glitch rotation in degrees.
 - `BOT_PAWN_MOVE_BIAS` controls how often the bot prefers pawn moves when available. Use a probability from `0` to `1`.
 - `BOT_MIN_DELAY_MS` and `BOT_MAX_DELAY_MS` control the bot's thinking delay in milliseconds.
+- `STORAGE_KEY` controls the `localStorage` key used for saved game state.
 
 Example: set `BOT_PAWN_MOVE_BIAS = 0.25` for fewer pawn moves, or `GLITCH_PROBABILITY = 0` to disable layout glitches by default.
 
@@ -127,7 +178,8 @@ Runtime deployment configuration lives in `deploy/chart/values.yaml`, with envir
 | `image.app.tag` | Image tag to deploy; normally injected by `pi_deploy` or set with `--set`. |
 | `image.app.pullPolicy` | Kubernetes image pull policy. |
 | `replicaCount` | Number of app pods. |
-| `service.type`, `service.port`, `service.targetPort` | Kubernetes Service exposure and ports. |
+| `service.type`, `service.port`, `service.targetPort` | Kubernetes Service exposure and ports; the base chart defaults to `NodePort` for local-cluster access. |
+| `service.nodePort` | Optional fixed NodePort. Leave `null` to let Kubernetes assign one, or set a valid cluster NodePort value, commonly in the `30000-32767` range. |
 | `ingress.*` | Optional ingress host, class, annotations, paths, and TLS secret references. |
 | `resources`, `nodeSelector`, `tolerations`, `affinity` | Standard pod scheduling and resource controls. |
 
