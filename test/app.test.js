@@ -918,10 +918,10 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
   const tempDir = mkdtempSync(join(tmpdir(), 'bad-chess-compose-'));
   const composeFile = join(tempDir, 'compose.yaml');
   const projectName = `bad-chess-test-${process.pid}-${Date.now()}`;
-  writeFileSync(composeFile, `services:\n  app:\n    build:\n      context: ${JSON.stringify(process.cwd())}\n      dockerfile: Dockerfile\n    image: really-bad-chess-web-app:test\n    ports:\n      - "127.0.0.1:0:80"\n`);
+  writeFileSync(composeFile, `services:\n  app:\n    build:\n      context: ${JSON.stringify(process.cwd())}\n      dockerfile: Dockerfile\n    image: really-bad-chess-web-app:test\n    ports:\n      - "127.0.0.1:0:8080"\n`);
 
   const composeArgs = ['compose', '-p', projectName, '-f', composeFile];
-  const up = spawnSync('docker', [...composeArgs, 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
+  const up = spawnSync('docker', [...composeArgs, 'up', '-d', '--wait', '--build'], { stdio: 'pipe', encoding: 'utf8' });
   if (up.status !== 0) {
     rmSync(tempDir, { recursive: true, force: true });
     t.skip(`docker compose up failed: ${up.stderr || up.stdout}`);
@@ -932,7 +932,7 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  const mapped = execFileSync('docker', [...composeArgs, 'port', 'app', '80'], { encoding: 'utf8' }).trim();
+  const mapped = execFileSync('docker', [...composeArgs, 'port', 'app', '8080'], { encoding: 'utf8' }).trim();
   const port = Number(mapped.split(':').pop());
   assert.ok(port > 0, `expected mapped port from ${mapped}`);
 
@@ -941,7 +941,10 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
   assert.match(index.body, /<script type="module" src="app\.js"><\/script>/);
 
   const modules = [
-    ['/app.js', /import .*\.\/game-controller\.js/],
+    ['/app.js', /import .*\.\/app-bootstrap\.js/],
+    ['/app-bootstrap.js', /export function startApp/],
+    ['/app-state.js', /export function createAppStateManager/],
+    ['/persisted-state-normalizer.js', /export function normalizePersistedState/],
     ['/board-view.js', /export function createDomBoardView/],
     ['/game-controller.js', /export function createGameController/],
     ['/bot.js', /export function makeBadBotMove/],
