@@ -15,7 +15,6 @@ const BOT_MAX_DELAY_MS = 1250;
 const ALLOWED_PIECES = new Set('.KQRBNPkqrbnp');
 const MAX_PLAYER_NAME_LENGTH = 80;
 const MAX_TIMER_MS = 30 * 24 * 60 * 60 * 1000;
-const PERSIST_DEBOUNCE_MS = 100;
 
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
@@ -29,7 +28,6 @@ let controller;
 let restoredState = loadSafePersistedState();
 let appState = restoredState?.app || defaultAppState();
 let isRestoring = false;
-let persistTimeoutId = null;
 let lastPersistedPayload = null;
 
 if (chaosEl && appState.settings && typeof appState.settings.chaos === 'boolean') chaosEl.checked = appState.settings.chaos;
@@ -51,7 +49,7 @@ const controllerOptions = {
   view,
   chaosEnabled: () => Boolean(chaosEl?.checked),
   onStateChange: () => {
-    if (!isRestoring) schedulePersistState();
+    if (!isRestoring) persistState();
   },
   config: {
     pawnMoveBias: BOT_PAWN_MOVE_BIAS,
@@ -85,7 +83,7 @@ if (restoredState?.game) {
 document.getElementById('newGame').addEventListener('click', () => {
   appState = defaultAppState({ playerName: playerNameEl?.value || appState.playerName || '' });
   controller.newGame();
-  flushPersistState();
+  persistState();
 });
 document.getElementById('noiseBtn').addEventListener('click', playBadNoise);
 chaosEl.addEventListener('change', () => {
@@ -94,27 +92,10 @@ chaosEl.addEventListener('change', () => {
 });
 playerNameEl?.addEventListener('input', () => {
   appState.playerName = playerNameEl.value;
-  schedulePersistState();
+  persistState();
 });
 resetSavedGameEl?.addEventListener('click', resetSavedGame);
-window.addEventListener?.('beforeunload', flushPersistState);
-
-function schedulePersistState() {
-  if (!window.localStorage) return;
-  if (persistTimeoutId !== null) clearTimeout(persistTimeoutId);
-  persistTimeoutId = setTimeout(() => {
-    persistTimeoutId = null;
-    persistState();
-  }, PERSIST_DEBOUNCE_MS);
-}
-
-function flushPersistState() {
-  if (persistTimeoutId !== null) {
-    clearTimeout(persistTimeoutId);
-    persistTimeoutId = null;
-  }
-  persistState();
-}
+window.addEventListener?.('beforeunload', persistState);
 
 function persistState() {
   if (!controller?.getState) return;
@@ -225,7 +206,6 @@ function resetSavedGame() {
   controller.newGame();
   isRestoring = false;
   renderAppState();
-  flushPersistState();
 }
 
 function nextTimer(paused = false) {

@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "really-bad-chess-web-app.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type | quote }}
+  type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.service.port | int }}
       targetPort: http
