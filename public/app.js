@@ -2,7 +2,7 @@ import { createDomBoardView } from './board-view.js';
 import { createGameController } from './game-controller.js';
 import { createDebuggableGameController } from './game-controller-debug.js';
 import { defaultAppState, calculateScore, currentTimer, elapsedMs, formatDuration } from './game-metrics.js';
-import { clearPersistedState, loadPersistedState, savePersistedState } from './game-persistence.js';
+import { clearPersistedState, loadPersistedState, savePersistedPayload } from './game-persistence.js';
 import { playBadNoise } from './audio.js';
 
 // Configuration knobs for maintainers who want to tune the badness without spelunking.
@@ -15,6 +15,7 @@ const BOT_MAX_DELAY_MS = 1250;
 const ALLOWED_PIECES = new Set('.KQRBNPkqrbnp');
 const MAX_PLAYER_NAME_LENGTH = 80;
 const MAX_TIMER_MS = 30 * 24 * 60 * 60 * 1000;
+const PERSIST_DEBOUNCE_MS = 250;
 
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
@@ -29,6 +30,7 @@ let restoredState = loadSafePersistedState();
 let appState = restoredState?.app || defaultAppState();
 let isRestoring = false;
 let lastPersistedPayload = null;
+let pendingPersistTimer = null;
 
 if (chaosEl && appState.settings && typeof appState.settings.chaos === 'boolean') chaosEl.checked = appState.settings.chaos;
 if (playerNameEl) playerNameEl.value = appState.playerName || '';
@@ -48,8 +50,8 @@ const view = createDomBoardView({
 const controllerOptions = {
   view,
   chaosEnabled: () => Boolean(chaosEl?.checked),
-  onStateChange: () => {
-    if (!isRestoring) persistState();
+  onStateChange: game => {
+    if (!isRestoring) persistState(game);
   },
   config: {
     pawnMoveBias: BOT_PAWN_MOVE_BIAS,
@@ -92,14 +94,34 @@ chaosEl.addEventListener('change', () => {
 });
 playerNameEl?.addEventListener('input', () => {
   appState.playerName = playerNameEl.value;
-  persistState();
+  schedulePersistState();
 });
 resetSavedGameEl?.addEventListener('click', resetSavedGame);
-window.addEventListener?.('beforeunload', persistState);
+window.addEventListener?.('beforeunload', flushPersistState);
 
-function persistState() {
+function schedulePersistState() {
+  if (pendingPersistTimer) clearTimeout(pendingPersistTimer);
+  pendingPersistTimer = setTimeout(() => {
+    pendingPersistTimer = null;
+    persistState();
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+function flushPersistState() {
+  if (pendingPersistTimer) {
+    clearTimeout(pendingPersistTimer);
+    pendingPersistTimer = null;
+  }
+  persistState();
+}
+
+function persistState(gameSnapshot = null) {
+  if (pendingPersistTimer) {
+    clearTimeout(pendingPersistTimer);
+    pendingPersistTimer = null;
+  }
   if (!controller?.getState) return;
-  const game = controller.getState();
+  const game = gameSnapshot || controller.getState();
   appState.playerName = playerNameEl?.value || appState.playerName || '';
   appState.settings = { ...appState.settings, chaos: Boolean(chaosEl?.checked) };
   appState.score = calculateScore(game.board);
@@ -109,7 +131,7 @@ function persistState() {
   const payload = JSON.stringify({ game, app: appState });
   if (payload === lastPersistedPayload) return;
   lastPersistedPayload = payload;
-  savePersistedState({ game, app: appState });
+  savePersistedPayload(payload);
 }
 
 function loadSafePersistedState() {
