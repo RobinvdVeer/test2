@@ -557,8 +557,8 @@ test('Helm chart renders deployment image from values', { skip: !commandExists('
   ], { encoding: 'utf8' });
 
   assert.match(rendered, /kind: Deployment/);
-  assert.match(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:ci-test-tag"/);
-  assert.doesNotMatch(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:latest"/);
+  assert.match(rendered, /image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:ci-test-tag"/);
+  assert.doesNotMatch(rendered, /image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:latest"/);
 });
 
 function httpGet(path, port) {
