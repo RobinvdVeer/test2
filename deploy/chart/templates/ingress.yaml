@@ -11,7 +11,7 @@ metadata:
   {{- end }}
 spec:
   {{- with .Values.ingress.className }}
-  ingressClassName: {{ . }}
+  ingressClassName: {{ . | quote }}
   {{- end }}
   {{- if .Values.ingress.tls }}
   tls:
@@ -20,7 +20,7 @@ spec:
         {{- range .hosts }}
         - {{ . | quote }}
         {{- end }}
-      secretName: {{ .secretName }}
+      secretName: {{ .secretName | quote }}
     {{- end }}
   {{- end }}
   rules:
@@ -29,13 +29,13 @@ spec:
       http:
         paths:
           {{- range .paths }}
-          - path: {{ .path }}
-            pathType: {{ .pathType }}
+          - path: {{ .path | quote }}
+            pathType: {{ .pathType | quote }}
             backend:
               service:
                 name: {{ include "really-bad-chess-web-app.fullname" $ }}
                 port:
-                  number: {{ $.Values.service.port }}
+                  number: {{ $.Values.service.port | int }}
           {{- end }}
     {{- end }}
 {{- end }}
