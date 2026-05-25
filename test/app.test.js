@@ -771,19 +771,22 @@ test('Helm chart renders deployment image from values', { skip: !commandExists('
   assert.doesNotMatch(rendered, /image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:latest"/);
 });
 
-test('Helm service is externally reachable via configurable NodePort', { skip: !commandExists('helm') }, () => {
+test('Helm service defaults to ClusterIP and supports configurable NodePort', { skip: !commandExists('helm') }, () => {
   const renderedDefault = execFileSync('helm', ['template', 'test', 'deploy/chart'], { encoding: 'utf8' });
-  assert.match(renderedDefault, /kind: Service[\s\S]*?spec:\n  type: NodePort/);
-  assert.match(renderedDefault, /kind: Service[\s\S]*?nodePort: 32080/);
+  assert.match(renderedDefault, /kind: Service[\s\S]*?spec:\n  type: ClusterIP/);
+  assert.doesNotMatch(renderedDefault, /nodePort:/, 'nodePort is omitted by default');
+  assert.match(renderedDefault, /seccompProfile:\n          type: RuntimeDefault/);
 
   const renderedWithNodePort = execFileSync('helm', [
     'template',
     'test',
     'deploy/chart',
     '--set',
+    'service.type=NodePort',
+    '--set',
     'service.nodePort=30080'
   ], { encoding: 'utf8' });
-  assert.match(renderedWithNodePort, /kind: Service[\s\S]*?nodePort: 30080/);
+  assert.match(renderedWithNodePort, /kind: Service[\s\S]*?spec:\n  type: NodePort[\s\S]*?nodePort: 30080/);
 });
 
 function httpGet(path, port) {
