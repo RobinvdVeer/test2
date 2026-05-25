@@ -68,7 +68,6 @@ if (restoredState?.game) {
   controller.setState(restoredState.game);
   isRestoring = false;
   renderAppState();
-  persistState();
   if (restoredState.game.turn === 'b' && !restoredState.game.gameOver) {
     controller.botMove?.();
   }
@@ -126,8 +125,10 @@ function loadPersistedState() {
 function resetSavedGame() {
   safeLocalStorageRemove(STORAGE_KEY);
   appState = defaultAppState({ playerName: playerNameEl?.value || '' });
+  isRestoring = true;
   controller.newGame();
-  persistState();
+  isRestoring = false;
+  renderAppState();
 }
 
 function currentTimer(paused = false) {
