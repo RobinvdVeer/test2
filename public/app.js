@@ -11,6 +11,7 @@ const BOT_PAWN_MOVE_BIAS = 0.7;
 const BOT_MIN_DELAY_MS = 550;
 const BOT_MAX_DELAY_MS = 1250;
 const STORAGE_KEY = 'bad-chess-2000:game-state:v1';
+const PERSIST_DEBOUNCE_MS = 100;
 
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
@@ -24,6 +25,8 @@ let controller;
 let restoredState = loadPersistedState();
 let appState = restoredState?.app || defaultAppState();
 let isRestoring = false;
+let persistTimeoutId = null;
+let lastPersistedPayload = null;
 
 if (chaosEl && appState.settings && typeof appState.settings.chaos === 'boolean') chaosEl.checked = appState.settings.chaos;
 if (playerNameEl) playerNameEl.value = appState.playerName || '';
@@ -44,7 +47,7 @@ const controllerOptions = {
   view,
   chaosEnabled: () => Boolean(chaosEl?.checked),
   onStateChange: () => {
-    if (!isRestoring) persistState();
+    if (!isRestoring) schedulePersistState();
   },
   config: {
     pawnMoveBias: BOT_PAWN_MOVE_BIAS,
@@ -79,7 +82,7 @@ if (restoredState?.game) {
 document.getElementById('newGame').addEventListener('click', () => {
   appState = defaultAppState({ playerName: playerNameEl?.value || appState.playerName || '' });
   controller.newGame();
-  persistState();
+  flushPersistState();
 });
 document.getElementById('noiseBtn').addEventListener('click', playBadNoise);
 chaosEl.addEventListener('change', () => {
@@ -88,10 +91,10 @@ chaosEl.addEventListener('change', () => {
 });
 playerNameEl?.addEventListener('input', () => {
   appState.playerName = playerNameEl.value;
-  persistState();
+  schedulePersistState();
 });
 resetSavedGameEl?.addEventListener('click', resetSavedGame);
-window.addEventListener?.('beforeunload', persistState);
+window.addEventListener?.('beforeunload', flushPersistState);
 
 function defaultAppState(overrides = {}) {
   return {
@@ -103,6 +106,23 @@ function defaultAppState(overrides = {}) {
   };
 }
 
+function schedulePersistState() {
+  if (!window.localStorage) return;
+  if (persistTimeoutId !== null) clearTimeout(persistTimeoutId);
+  persistTimeoutId = setTimeout(() => {
+    persistTimeoutId = null;
+    persistState();
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+function flushPersistState() {
+  if (persistTimeoutId !== null) {
+    clearTimeout(persistTimeoutId);
+    persistTimeoutId = null;
+  }
+  persistState();
+}
+
 function persistState() {
   if (!controller?.getState) return;
   const game = controller.getState();
@@ -111,7 +131,11 @@ function persistState() {
   appState.score = calculateScore(game.board);
   appState.timer = currentTimer(game.gameOver);
   renderAppState();
-  safeLocalStorageSet(STORAGE_KEY, JSON.stringify({ game, app: appState }));
+
+  const payload = JSON.stringify({ game, app: appState });
+  if (payload === lastPersistedPayload) return;
+  lastPersistedPayload = payload;
+  safeLocalStorageSet(STORAGE_KEY, payload);
 }
 
 function loadPersistedState() {
@@ -127,7 +151,7 @@ function resetSavedGame() {
   safeLocalStorageRemove(STORAGE_KEY);
   appState = defaultAppState({ playerName: playerNameEl?.value || '' });
   controller.newGame();
-  persistState();
+  flushPersistState();
 }
 
 function currentTimer(paused = false) {
