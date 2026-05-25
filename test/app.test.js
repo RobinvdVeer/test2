@@ -19,6 +19,9 @@ import {
 import { chooseBadBotMove, makeBadBotMove } from '../public/bot.js';
 import { playBadNoise } from '../public/audio.js';
 import { createDomBoardView } from '../public/board-view.js';
+import { createGameController } from '../public/game-controller.js';
+
+const STORAGE_KEY = 'bad-chess-2000:game-state:v1';
 
 let importCounter = 0;
 
@@ -92,13 +95,17 @@ function createAudioContextRecorder() {
   return { AudioContext, calls, oscillators, gains };
 }
 
-async function loadApp({ random = () => 0.99, audioContext, modulePath = '../public/app.js' } = {}) {
+async function loadApp({ random = () => 0.99, audioContext, modulePath = '../public/app.js', localStorage, now } = {}) {
   const ids = {
     board: new ElementStub('div', 'board'),
     status: new ElementStub('div', 'status'),
     chaos: new ElementStub('input', 'chaos'),
     newGame: new ElementStub('button', 'newGame'),
-    noiseBtn: new ElementStub('button', 'noiseBtn')
+    noiseBtn: new ElementStub('button', 'noiseBtn'),
+    playerName: new ElementStub('input', 'playerName'),
+    score: new ElementStub('strong', 'score'),
+    timer: new ElementStub('strong', 'timer'),
+    resetSavedGame: new ElementStub('button', 'resetSavedGame')
   };
   ids.chaos.checked = true;
   const timers = [];
@@ -111,16 +118,24 @@ async function loadApp({ random = () => 0.99, audioContext, modulePath = '../pub
   const originalRandom = Math.random;
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
+  const originalDateNow = Date.now;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalAddEventListener = globalThis.addEventListener;
   const originalAudioContext = globalThis.AudioContext;
   const originalWebkitAudioContext = globalThis.webkitAudioContext;
   const originalTestHooksFlag = globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
   const recorder = audioContext || createAudioContextRecorder();
+
+  const windowListeners = {};
 
   globalThis.document = document;
   globalThis.window = globalThis;
   globalThis.AudioContext = recorder.AudioContext;
   globalThis.webkitAudioContext = recorder.AudioContext;
   globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = true;
+  if (localStorage !== undefined) globalThis.localStorage = localStorage;
+  if (now !== undefined) Date.now = typeof now === 'function' ? now : () => now;
+  globalThis.addEventListener = (type, fn) => { (windowListeners[type] ||= []).push(fn); };
   Math.random = random;
   globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
   globalThis.clearTimeout = () => {};
@@ -131,6 +146,11 @@ async function loadApp({ random = () => 0.99, audioContext, modulePath = '../pub
     Math.random = originalRandom;
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
+    Date.now = originalDateNow;
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+    if (originalAddEventListener === undefined) delete globalThis.addEventListener;
+    else globalThis.addEventListener = originalAddEventListener;
     if (originalAudioContext === undefined) delete globalThis.AudioContext;
     else globalThis.AudioContext = originalAudioContext;
     if (originalWebkitAudioContext === undefined) delete globalThis.webkitAudioContext;
@@ -146,7 +166,21 @@ async function loadApp({ random = () => 0.99, audioContext, modulePath = '../pub
     throw err;
   }
 
-  return { api: globalThis.__badChess, ids, timers, audio: recorder, restore };
+  const dispatchWindowEvent = type => (windowListeners[type] || []).forEach(fn => fn({ type }));
+
+  return { api: globalThis.__badChess, ids, timers, audio: recorder, restore, dispatchWindowEvent };
+}
+
+function createMemoryLocalStorage(initial = {}) {
+  const store = new Map(Object.entries(initial));
+  return {
+    getItem(key) { return store.has(key) ? store.get(key) : null; },
+    setItem(key, value) { store.set(key, String(value)); },
+    removeItem(key) { store.delete(key); },
+    key(index) { return [...store.keys()][index] || null; },
+    get length() { return store.size; },
+    _store: store
+  };
 }
 
 function stateFrom(boardOrNext, turn = 'w', castling = { K: false, Q: false, k: false, q: false }, enPassant = null) {
@@ -194,6 +228,182 @@ test('root-level runtime modules syntax-check and import successfully', async ()
   } finally {
     app.restore();
   }
+});
+
+test('app restores persisted game state, app state, and resumes black turn', async () => {
+  const savedWhiteTurn = {
+    game: {
+      board: ['....k...', '........', '........', '........', '...Q....', '........', '........', '....K...'],
+      turn: 'w',
+      selected: { r: 4, c: 3 },
+      legalForSelected: [{ from: { r: 4, c: 3 }, to: { r: 4, c: 4 } }],
+      enPassant: { r: 2, c: 4 },
+      castling: { K: false, Q: true, k: false, q: true },
+      gameOver: false
+    },
+    app: {
+      playerName: 'Ada',
+      score: 123,
+      timer: { elapsedMs: 65000, startedAt: 1000 },
+      settings: { chaos: false }
+    }
+  };
+  const storage = createMemoryLocalStorage({ [STORAGE_KEY]: JSON.stringify(savedWhiteTurn) });
+  const app = await loadApp({ localStorage: storage, now: 4000 });
+  try {
+    const state = app.api.getState();
+    assert.equal(boardKey(state), savedWhiteTurn.game.board.join('/'));
+    assert.equal(state.turn, 'w');
+    assert.deepEqual(state.enPassant, { r: 2, c: 4 });
+    assert.deepEqual(state.castling, { K: false, Q: true, k: false, q: true });
+    assert.equal(app.ids.playerName.value, 'Ada');
+    assert.equal(app.ids.chaos.checked, false);
+    assert.equal(app.ids.score.textContent, '123');
+    assert.equal(app.ids.timer.textContent, '01:08');
+    assert.match(squareAt(app.ids, 4, 3).innerHTML, /♕/);
+  } finally {
+    app.restore();
+  }
+
+  const savedBlackTurn = {
+    game: {
+      board: createGameState().board.map(row => row.join('')),
+      turn: 'b',
+      selected: null,
+      legalForSelected: [],
+      enPassant: null,
+      castling: { K: true, Q: true, k: true, q: true },
+      gameOver: false
+    },
+    app: { playerName: 'Bot Bait', score: 0, timer: { elapsedMs: 0, startedAt: 1000 }, settings: { chaos: true } }
+  };
+  const blackStorage = createMemoryLocalStorage({ [STORAGE_KEY]: JSON.stringify(savedBlackTurn) });
+  const blackApp = await loadApp({ localStorage: blackStorage, random: () => 0, now: 1000 });
+  try {
+    assert.equal(blackApp.api.getState().turn, 'w', 'black saved turn is resumed by making the bot move');
+    assert.notEqual(boardKey(blackApp.api.getState()), savedBlackTurn.game.board.join('/'));
+  } finally {
+    blackApp.restore();
+  }
+});
+
+test('reset saved game clears persistence and resets visible state', async () => {
+  const storage = createMemoryLocalStorage({ [STORAGE_KEY]: JSON.stringify({
+    game: { board: ['....k...', '........', '........', '........', '...Q....', '........', '........', '....K...'], turn: 'w', selected: null, legalForSelected: [], enPassant: null, castling: { K: false, Q: false, k: false, q: false }, gameOver: false },
+    app: { playerName: 'Reset Me', score: 9, timer: { elapsedMs: 99000, startedAt: null }, settings: { chaos: false } }
+  }) });
+  const app = await loadApp({ localStorage: storage, now: 200000 });
+  try {
+    app.ids.resetSavedGame.click();
+    assert.equal(storage.getItem(STORAGE_KEY), null);
+    assert.equal(boardKey(app.api.getState()), boardKey(createGameState()));
+    assert.equal(app.ids.score.textContent, '0');
+    assert.equal(app.ids.timer.textContent, '00:00');
+    assert.equal(app.ids.playerName.value, 'Reset Me');
+  } finally {
+    app.restore();
+  }
+});
+
+test('app tolerates localStorage failures and corrupt persisted data', async () => {
+  for (const localStorage of [
+    { getItem() { throw new Error('get blocked'); }, setItem() {}, removeItem() {} },
+    { getItem() { return '{not json'; }, setItem() {}, removeItem() {} },
+    { getItem() { return null; }, setItem() { throw new Error('quota'); }, removeItem() {} },
+    { getItem() { return null; }, setItem() {}, removeItem() { throw new Error('remove blocked'); } }
+  ]) {
+    const app = await loadApp({ localStorage });
+    try {
+      assert.equal(app.ids.board.children.length, 64);
+      assert.doesNotThrow(() => {
+        app.ids.playerName.value = 'Still playing';
+        app.ids.playerName.dispatchEvent({ type: 'input' });
+        app.ids.chaos.checked = false;
+        app.ids.chaos.dispatchEvent({ type: 'change' });
+        app.ids.resetSavedGame.click();
+      });
+      squareAt(app.ids, 6, 4).click();
+      squareAt(app.ids, 4, 4).click();
+      assert.equal(app.api.getState().turn, 'b');
+    } finally {
+      app.restore();
+    }
+  }
+});
+
+test('timer persists elapsed time and pauses when game is over', async () => {
+  let now = 100000;
+  const storage = createMemoryLocalStorage();
+  const app = await loadApp({ localStorage: storage, now: () => now });
+  try {
+    assert.equal(app.ids.timer.textContent, '00:00');
+    now += 65000;
+    app.dispatchWindowEvent('beforeunload');
+    let saved = JSON.parse(storage.getItem(STORAGE_KEY));
+    assert.equal(saved.app.timer.elapsedMs, 65000);
+    assert.equal(saved.app.timer.startedAt, 165000);
+    assert.equal(app.ids.timer.textContent, '01:05');
+
+    app.api.setState({ board: ['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], turn: 'b', enPassant: null, castling: { K: false, Q: false, k: false, q: false }, selected: null, legalForSelected: [], gameOver: true });
+    app.api.render();
+    saved = JSON.parse(storage.getItem(STORAGE_KEY));
+    assert.equal(saved.app.timer.startedAt, null);
+    assert.equal(saved.app.timer.elapsedMs, 65000);
+    now += 30000;
+    app.api.render();
+    saved = JSON.parse(storage.getItem(STORAGE_KEY));
+    assert.equal(saved.app.timer.elapsedMs, 65000);
+    assert.equal(app.ids.timer.textContent, '01:05');
+  } finally {
+    app.restore();
+  }
+});
+
+test('controller setState/getState round-trip and isolate mutable state', () => {
+  const renders = [];
+  const statuses = [];
+  const controller = createGameController({
+    view: {
+      render(game, meta) { renders.push({ game, meta }); },
+      setStatus(status) { statuses.push(status); }
+    },
+    chaosEnabled: () => false
+  });
+  const next = {
+    board: ['....k...', '........', '........', '........', '...Q....', '........', '........', '....K...'],
+    turn: 'w',
+    selected: { r: 4, c: 3 },
+    legalForSelected: [{ from: { r: 4, c: 3 }, to: { r: 4, c: 4 } }],
+    enPassant: { r: 2, c: 4 },
+    castling: { K: false, Q: true, k: false, q: true },
+    gameOver: false
+  };
+  controller.setState(next);
+  next.selected.r = 0;
+  next.legalForSelected[0].to.r = 0;
+  next.enPassant.r = 0;
+  next.board[4] = '........';
+
+  const state = controller.getState();
+  assert.equal(boardKey(state), '....k.../......../......../......../...Q..../......../......../....K...');
+  assert.deepEqual(state.selected, { r: 4, c: 3 });
+  assert.deepEqual(state.legalForSelected, [{ from: { r: 4, c: 3 }, to: { r: 4, c: 4 } }]);
+  assert.deepEqual(state.enPassant, { r: 2, c: 4 });
+  assert.deepEqual(state.castling, { K: false, Q: true, k: false, q: true });
+
+  state.board[4][3] = '.';
+  state.selected.r = 1;
+  state.legalForSelected[0].to.c = 7;
+  state.enPassant.c = 7;
+  state.castling.Q = false;
+  const again = controller.getState();
+  assert.equal(again.board[4][3], 'Q');
+  assert.deepEqual(again.selected, { r: 4, c: 3 });
+  assert.deepEqual(again.legalForSelected[0].to, { r: 4, c: 4 });
+  assert.deepEqual(again.enPassant, { r: 2, c: 4 });
+  assert.equal(again.castling.Q, true);
+  assert.equal(renders.length, 1);
+  assert.deepEqual(statuses, []);
 });
 
 test('core move generator covers initial moves, piece movement, blocking, captures, and pinned pieces', () => {
@@ -557,8 +767,23 @@ test('Helm chart renders deployment image from values', { skip: !commandExists('
   ], { encoding: 'utf8' });
 
   assert.match(rendered, /kind: Deployment/);
-  assert.match(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:ci-test-tag"/);
-  assert.doesNotMatch(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:latest"/);
+  assert.match(rendered, /image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:ci-test-tag"/);
+  assert.doesNotMatch(rendered, /image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:latest"/);
+});
+
+test('Helm service is externally reachable via configurable NodePort', { skip: !commandExists('helm') }, () => {
+  const renderedDefault = execFileSync('helm', ['template', 'test', 'deploy/chart'], { encoding: 'utf8' });
+  assert.match(renderedDefault, /kind: Service[\s\S]*?spec:\n  type: NodePort/);
+  assert.doesNotMatch(renderedDefault, /nodePort:/, 'nodePort is omitted by default so Kubernetes can assign one');
+
+  const renderedWithNodePort = execFileSync('helm', [
+    'template',
+    'test',
+    'deploy/chart',
+    '--set',
+    'service.nodePort=30080'
+  ], { encoding: 'utf8' });
+  assert.match(renderedWithNodePort, /kind: Service[\s\S]*?nodePort: 30080/);
 });
 
 function httpGet(path, port) {

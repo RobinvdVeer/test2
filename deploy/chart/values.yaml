@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   app:
-    repository: ghcr.io/pi/really-bad-chess-web-app
+    repository: ghcr.io/robinvdveer/really-bad-chess-web-app
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -34,9 +34,10 @@ securityContext:
   runAsGroup: 101
 
 service:
-  type: ClusterIP
+  type: NodePort
   port: 80
   targetPort: 8080
+  nodePort: null
 
 ingress:
   enabled: false

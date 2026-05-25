@@ -6,7 +6,8 @@ export function createGameController(options) {
   return createGameControllerSession(options).controller;
 }
 
-export function createGameControllerSession({ view, random = Math.random, setTimeoutFn = setTimeout, chaosEnabled = () => false, config = {} }) {
+export function createGameControllerSession(options = {}) {
+  const { view, random = Math.random, setTimeoutFn = setTimeout, chaosEnabled = () => false, config = {} } = options;
   const pawnMoveBias = config.pawnMoveBias ?? config.botPawnMoveBias ?? 0.7;
   const botMinDelayMs = config.botMinDelayMs ?? 550;
   const botMaxDelayMs = config.botMaxDelayMs ?? 1250;
@@ -21,6 +22,7 @@ export function createGameControllerSession({ view, random = Math.random, setTim
     legalForSelected = [];
     setStatus('White to move. The bot is already sweating pixels.');
     render();
+    emitStateChanged();
   }
 
   function selectSquare(r, c) {
@@ -48,11 +50,13 @@ export function createGameControllerSession({ view, random = Math.random, setTim
       setStatus('That is not your piece. Bad chess, not theft chess.');
     }
     render();
+    emitStateChanged();
   }
 
   function afterPlayerMove() {
     game.turn = 'b';
     render();
+    emitStateChanged();
     const gameEnd = showGameEndIfNeeded();
     if (gameEnd.over) return;
     setStatus('Bot thinking very incorrectly...');
@@ -64,6 +68,7 @@ export function createGameControllerSession({ view, random = Math.random, setTim
     if (!makeBadBotMove(game, { pawnMoveBias, random, moves: cachedMoves || undefined })) return showGameEndIfNeeded();
     game.turn = 'w';
     render();
+    emitStateChanged();
     if (!showGameEndIfNeeded().over) setStatus(inCheck(game, 'w') ? 'CHECK! The bot did that by accident.' : 'Your move. The bot regrets nothing.');
   }
 
@@ -73,6 +78,7 @@ export function createGameControllerSession({ view, random = Math.random, setTim
     game.gameOver = true;
     const side = result.color === 'w' ? 'White' : 'Black';
     setStatus(result.checkmate ? `${side} is checkmated. Incredible and upsetting.` : 'Stalemate. Nobody wins, especially chess.');
+    emitStateChanged();
     return result;
   }
 
@@ -84,6 +90,38 @@ export function createGameControllerSession({ view, random = Math.random, setTim
     view.setStatus(status);
   }
 
+  function setState(next = {}) {
+    if (next.board) game.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
+    if ('turn' in next) game.turn = next.turn;
+    if ('selected' in next) selected = cloneStateValue(next.selected);
+    if ('legalForSelected' in next) legalForSelected = Array.isArray(next.legalForSelected) ? cloneStateValue(next.legalForSelected) : [];
+    if ('enPassant' in next) game.enPassant = cloneStateValue(next.enPassant);
+    if ('castling' in next) game.castling = { ...next.castling };
+    if ('gameOver' in next) game.gameOver = next.gameOver;
+    render();
+    emitStateChanged();
+  }
+
+  function getState() {
+    return {
+      board: game.board.map(row => row.slice()),
+      turn: game.turn,
+      selected: cloneStateValue(selected),
+      legalForSelected: cloneStateValue(legalForSelected),
+      enPassant: cloneStateValue(game.enPassant),
+      castling: { ...game.castling },
+      gameOver: game.gameOver
+    };
+  }
+
+  function emitStateChanged() {
+    if (typeof options.onStateChange === 'function') options.onStateChange(getState());
+  }
+
+  function cloneStateValue(value) {
+    return value == null ? value : JSON.parse(JSON.stringify(value));
+  }
+
   function randomDelay(min, max) {
     return min + random() * (max - min);
   }
@@ -91,7 +129,10 @@ export function createGameControllerSession({ view, random = Math.random, setTim
   const controller = {
     newGame,
     selectSquare,
-    render
+    render,
+    setState,
+    getState,
+    botMove
   };
 
   const internals = {

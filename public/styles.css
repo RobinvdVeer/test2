@@ -49,6 +49,24 @@ h1 {
   border: 4px dashed #f0f;
   font-weight: bold;
 }
+.player-state {
+  margin: 8px auto 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #fff;
+  text-shadow: 2px 2px #000;
+}
+.player-state input {
+  max-width: 190px;
+  font-family: inherit;
+  color: #000;
+  background: #ff0;
+  border: 4px inset #0ff;
+  padding: 4px 6px;
+}
 #board {
   width: min(92vw, 560px);
   height: min(92vw, 560px);
