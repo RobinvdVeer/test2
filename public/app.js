@@ -1,6 +1,8 @@
 import { createDomBoardView } from './board-view.js';
 import { createGameController } from './game-controller.js';
 import { createDebuggableGameController } from './game-controller-debug.js';
+import { defaultAppState, calculateScore, currentTimer, elapsedMs, formatDuration } from './game-metrics.js';
+import { clearPersistedState, loadPersistedState, savePersistedState } from './game-persistence.js';
 import { playBadNoise } from './audio.js';
 
 // Configuration knobs for maintainers who want to tune the badness without spelunking.
@@ -10,7 +12,6 @@ const GLITCH_MAX_ROTATION_DEG = 4;
 const BOT_PAWN_MOVE_BIAS = 0.7;
 const BOT_MIN_DELAY_MS = 550;
 const BOT_MAX_DELAY_MS = 1250;
-const STORAGE_KEY = 'bad-chess-2000:game-state:v1';
 
 const boardEl = document.getElementById('board');
 const statusEl = document.getElementById('status');
@@ -93,51 +94,26 @@ playerNameEl?.addEventListener('input', () => {
 resetSavedGameEl?.addEventListener('click', resetSavedGame);
 window.addEventListener?.('beforeunload', persistState);
 
-function defaultAppState(overrides = {}) {
-  return {
-    playerName: '',
-    score: 0,
-    timer: { elapsedMs: 0, startedAt: Date.now() },
-    settings: { chaos: true },
-    ...overrides
-  };
-}
-
 function persistState() {
   if (!controller?.getState) return;
   const game = controller.getState();
   appState.playerName = playerNameEl?.value || appState.playerName || '';
   appState.settings = { ...appState.settings, chaos: Boolean(chaosEl?.checked) };
   appState.score = calculateScore(game.board);
-  appState.timer = currentTimer(game.gameOver);
+  appState.timer = nextTimer(game.gameOver);
   renderAppState();
-  safeLocalStorageSet(STORAGE_KEY, JSON.stringify({ game, app: appState }));
-}
-
-function loadPersistedState() {
-  try {
-    const raw = window.localStorage?.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  savePersistedState({ game, app: appState });
 }
 
 function resetSavedGame() {
-  safeLocalStorageRemove(STORAGE_KEY);
+  clearPersistedState();
   appState = defaultAppState({ playerName: playerNameEl?.value || '' });
   controller.newGame();
   persistState();
 }
 
-function currentTimer(paused = false) {
-  const previous = appState.timer || { elapsedMs: 0, startedAt: Date.now() };
-  if (paused) return { elapsedMs: elapsedMs(previous), startedAt: null };
-  return { elapsedMs: elapsedMs(previous), startedAt: Date.now() };
-}
-
-function elapsedMs(timer) {
-  return (timer.elapsedMs || 0) + (timer.startedAt ? Date.now() - timer.startedAt : 0);
+function nextTimer(paused = false) {
+  return currentTimer(appState.timer || { elapsedMs: 0, startedAt: Date.now() }, paused);
 }
 
 function renderAppState() {
@@ -145,30 +121,3 @@ function renderAppState() {
   if (timerEl) timerEl.textContent = formatDuration(elapsedMs(appState.timer || { elapsedMs: 0 }));
 }
 
-function formatDuration(ms) {
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
-  const seconds = (totalSeconds % 60).toString().padStart(2, '0');
-  return `${minutes}:${seconds}`;
-}
-
-function calculateScore(board) {
-  const values = { P: 1, N: 3, B: 3, R: 5, Q: 9, K: 0 };
-  let score = 0;
-  for (const row of board || []) {
-    for (const piece of row) {
-      const value = values[piece.toUpperCase()] || 0;
-      if (piece >= 'A' && piece <= 'Z') score += value;
-      else if (piece >= 'a' && piece <= 'z') score -= value;
-    }
-  }
-  return score;
-}
-
-function safeLocalStorageSet(key, value) {
-  try { window.localStorage?.setItem(key, value); } catch {}
-}
-
-function safeLocalStorageRemove(key) {
-  try { window.localStorage?.removeItem(key); } catch {}
-}

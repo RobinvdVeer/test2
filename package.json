@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check app.js && node --check bot.js && node --check game-controller.js && node --check public/app.js && node --check public/chess-engine.js && node --check public/audio.js && node --check public/board-view.js && node --check public/game-controller.js && node --check public/game-controller-debug.js && node --check public/bot.js && node --check public/piece-symbols.js",
-    "test": "node --test"
+    "check": "node --check app.js && node --check bot.js && node --check game-controller.js && node --check public/app.js && node --check public/chess-engine.js && node --check public/audio.js && node --check public/board-view.js && node --check public/game-controller.js && node --check public/game-controller-debug.js && node --check public/game-metrics.js && node --check public/game-persistence.js && node --check public/bot.js && node --check public/piece-symbols.js",
+    "test": "node --test test/*.test.js"
   }
 }
