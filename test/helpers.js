@@ -76,7 +76,7 @@ export function createAudioContextRecorder() {
   return { AudioContext, calls, oscillators, gains };
 }
 
-export async function loadApp({ random = () => 0.99, audioContext, modulePath = '../public/app.js' } = {}) {
+export async function loadApp({ random = () => 0.99, audioContext, modulePath = '../public/app.js', localStorage, now } = {}) {
   const ids = {
     board: new ElementStub('div', 'board'),
     status: new ElementStub('div', 'status'),
@@ -91,11 +91,12 @@ export async function loadApp({ random = () => 0.99, audioContext, modulePath = 
   ids.chaos.checked = true;
   const timers = [];
   const storage = new Map();
+  const windowListeners = {};
   const document = {
     getElementById(id) { return ids[id]; },
     createElement(tagName) { return new ElementStub(tagName); }
   };
-  const localStorage = {
+  const defaultLocalStorage = {
     getItem(key) { return storage.has(key) ? storage.get(key) : null; },
     setItem(key, value) { storage.set(key, String(value)); },
     removeItem(key) { storage.delete(key); }
@@ -105,6 +106,7 @@ export async function loadApp({ random = () => 0.99, audioContext, modulePath = 
   const originalRandom = Math.random;
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
+  const originalDateNow = Date.now;
   const originalAudioContext = globalThis.AudioContext;
   const originalWebkitAudioContext = globalThis.webkitAudioContext;
   const originalTestHooksFlag = globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__;
@@ -114,11 +116,12 @@ export async function loadApp({ random = () => 0.99, audioContext, modulePath = 
 
   globalThis.document = document;
   globalThis.window = globalThis;
-  globalThis.localStorage = localStorage;
-  globalThis.addEventListener = () => {};
+  globalThis.localStorage = localStorage ?? defaultLocalStorage;
+  globalThis.addEventListener = (type, fn) => { (windowListeners[type] ||= []).push(fn); };
   globalThis.AudioContext = recorder.AudioContext;
   globalThis.webkitAudioContext = recorder.AudioContext;
   globalThis.__BAD_CHESS_ENABLE_TEST_HOOKS__ = true;
+  if (now !== undefined) Date.now = typeof now === 'function' ? now : () => now;
   Math.random = random;
   globalThis.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
   globalThis.clearTimeout = () => {};
@@ -127,6 +130,7 @@ export async function loadApp({ random = () => 0.99, audioContext, modulePath = 
     globalThis.document = originalDocument;
     globalThis.window = originalWindow;
     Math.random = originalRandom;
+    Date.now = originalDateNow;
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
     if (originalAudioContext === undefined) delete globalThis.AudioContext;
@@ -148,7 +152,21 @@ export async function loadApp({ random = () => 0.99, audioContext, modulePath = 
     throw err;
   }
 
-  return { api: globalThis.__badChess, ids, timers, audio: recorder, restore };
+  const dispatchWindowEvent = type => (windowListeners[type] || []).forEach(fn => fn({ type }));
+
+  return { api: globalThis.__badChess, ids, timers, audio: recorder, restore, dispatchWindowEvent };
+}
+
+export function createMemoryLocalStorage(initial = {}) {
+  const store = new Map(Object.entries(initial));
+  return {
+    getItem(key) { return store.has(key) ? store.get(key) : null; },
+    setItem(key, value) { store.set(key, String(value)); },
+    removeItem(key) { store.delete(key); },
+    key(index) { return [...store.keys()][index] || null; },
+    get length() { return store.size; },
+    _store: store
+  };
 }
 
 export function stateFrom(boardOrNext, turn = 'w', castling = { K: false, Q: false, k: false, q: false }, enPassant = null) {

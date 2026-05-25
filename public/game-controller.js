@@ -1,4 +1,4 @@
-import { colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove } from './chess-engine.js';
+import { allLegalMoves, colorOf, createGameState, getGameEnd, inCheck, legalMovesFor, makeMove, pseudoMovesFor } from './chess-engine.js';
 import { makeBadBotMove } from './bot.js';
 import { PIECES } from './piece-symbols.js';
 
@@ -135,19 +135,22 @@ export function createGameControllerSession(options = {}) {
     botMove
   };
 
-  const internals = {
-    get game() { return game; },
-    get selected() { return selected; },
-    set selected(value) { selected = value; },
-    get legalForSelected() { return legalForSelected; },
-    set legalForSelected(value) { legalForSelected = value; },
+  const debugApi = {
     newGame,
     render,
     selectSquare,
-    afterPlayerMove,
+    afterMove: afterPlayerMove,
     botMove,
-    showGameEndIfNeeded
+    checkGameEnd() { return showGameEndIfNeeded().over; },
+    inCheck(color) { return inCheck(game, color); },
+    colorOf,
+    setState,
+    getState,
+    allLegalMoves(color) { return allLegalMoves(game, color); },
+    legalMovesFor(r, c) { return legalMovesFor(game, r, c); },
+    pseudoMovesFor(r, c) { return pseudoMovesFor(game, r, c); },
+    makeMove(move) { return makeMove(game, move); }
   };
 
-  return { controller, internals };
+  return { controller, debugApi };
 }
