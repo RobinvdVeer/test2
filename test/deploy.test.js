@@ -19,23 +19,36 @@ test('Helm chart renders deployment image from values', { skip: !commandExists('
   ], { encoding: 'utf8' });
 
   assert.match(rendered, /kind: Deployment/);
-  assert.match(rendered, /image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:ci-test-tag"/);
-  assert.doesNotMatch(rendered, /image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:latest"/);
+  assert.match(rendered, /^\s*image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:ci-test-tag"$/m);
+  assert.doesNotMatch(rendered, /^\s*image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:latest"$/m);
+  assert.doesNotMatch(rendered, /ghcr\.io\/pi\/really-bad-chess-web-app/);
 });
 
-test('Helm service is externally reachable via configured NodePort', { skip: !commandExists('helm') }, () => {
+function renderedServiceNodePort(rendered) {
+  const match = rendered.match(/kind: Service[\s\S]*?\n\s*nodePort: (\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+test('Helm service defaults to ClusterIP, supports configurable NodePort, and rejects invalid values', { skip: !commandExists('helm') }, () => {
   const renderedDefault = execFileSync('helm', ['template', 'test', 'deploy/chart'], { encoding: 'utf8' });
-  assert.match(renderedDefault, /kind: Service[\s\S]*?spec:\n  type: NodePort/);
-  assert.match(renderedDefault, /kind: Service[\s\S]*?nodePort: 32080/);
+  assert.match(renderedDefault, /kind: Service[\s\S]*?spec:\n  type: ClusterIP/);
+  assert.equal(renderedServiceNodePort(renderedDefault), null, 'nodePort is omitted by default');
 
   const renderedWithNodePort = execFileSync('helm', [
     'template',
     'test',
     'deploy/chart',
     '--set',
+    'service.type=NodePort',
+    '--set',
     'service.nodePort=30080'
   ], { encoding: 'utf8' });
-  assert.match(renderedWithNodePort, /kind: Service[\s\S]*?nodePort: 30080/);
+  assert.match(renderedWithNodePort, /kind: Service[\s\S]*?spec:\n  type: NodePort/);
+  assert.equal(renderedServiceNodePort(renderedWithNodePort), 30080);
+
+  const invalid = spawnSync('helm', ['template', 'test', 'deploy/chart', '--set', 'service.nodePort=8080'], { encoding: 'utf8' });
+  assert.notEqual(invalid.status, 0);
+  assert.match(`${invalid.stderr}\n${invalid.stdout}`, /nodePort|minimum|30000/i);
 });
 
 test('Docker Compose config and image build are valid', { skip: !commandExists('docker') }, () => {
