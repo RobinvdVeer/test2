@@ -8,6 +8,9 @@ export function createGameController(options) {
 
 export function createGameControllerSession(options = {}) {
   const { view, random = Math.random, setTimeoutFn = setTimeout, chaosEnabled = () => false, config = {} } = options;
+  if (!view || typeof view.render !== 'function' || typeof view.setStatus !== 'function') {
+    throw new TypeError('createGameControllerSession requires a view with render(game, renderOptions) and setStatus(status) methods');
+  }
   const pawnMoveBias = config.pawnMoveBias ?? config.botPawnMoveBias ?? 0.7;
   const botMinDelayMs = config.botMinDelayMs ?? 550;
   const botMaxDelayMs = config.botMaxDelayMs ?? 1250;
