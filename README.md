@@ -47,18 +47,20 @@ helm upgrade --install really-bad-chess ./deploy/chart \
 
 `image.app.tag` is expected to be supplied by the deployment pipeline, such as `pi_deploy`, when promoting a built GHCR image.
 
-The base Helm chart exposes the app with a `NodePort` Service. To see the assigned port on a local cluster:
+The base Helm chart exposes the app with a `NodePort` Service and pins `service.nodePort` to `32080` by default. To see the service on a local cluster:
 
 ```sh
 kubectl get svc really-bad-chess-really-bad-chess-web-app
 ```
 
-To pin a port instead of using an auto-assigned one, set a valid NodePort for your cluster, commonly in the `30000-32767` range:
+To use a different fixed port, set a valid NodePort for your cluster, commonly in the `30000-32767` range:
 
 ```sh
 helm upgrade --install really-bad-chess ./deploy/chart \
   --set service.nodePort=30080
 ```
+
+To let Kubernetes auto-assign a NodePort instead, explicitly set `service.nodePort=null`.
 
 ## Check
 
@@ -113,7 +115,7 @@ window.BadChess.newGame();
 window.BadChess.resetSavedGame();
 ```
 
-`newGame()` starts a fresh visible game and persists it. `resetSavedGame()` clears the `localStorage` save and starts/persists a fresh game. These are the only stable application APIs exposed on `window.BadChess`.
+`newGame()` starts a fresh visible game and persists it. `resetSavedGame()` clears the `localStorage` save and starts a fresh in-memory game; the next persistence event writes a new save. These are the only stable application APIs exposed on `window.BadChess`.
 
 ### Experimental helper modules
 
@@ -138,7 +140,7 @@ Optional options:
 - `random`: random-number function for deterministic bot behavior. Defaults to `Math.random`.
 - `setTimeoutFn`: timer function used for bot delays. Defaults to `setTimeout`.
 - `chaosEnabled`: function returning whether visual chaos should be rendered. Defaults to `() => false`.
-- `onStateChange`: callback invoked after `render()` with `controller.getState()`; used by the browser app to persist state.
+- `onStateChange`: callback invoked with `controller.getState()` after state-changing controller methods (`newGame()`, `selectSquare()`, `setState()`, and `botMove()`); used by the browser app to persist state.
 - `config.pawnMoveBias`: bot pawn-move preference probability. `config.botPawnMoveBias` is a compatibility alias.
 - `config.botMinDelayMs` / `config.botMaxDelayMs`: bot thinking-delay range in milliseconds.
 
@@ -146,7 +148,7 @@ Controller methods:
 
 - `newGame()` starts a fresh game and renders it.
 - `selectSquare(row, column)` handles a user selection/move for White.
-- `render()` redraws the current state and triggers `onStateChange`.
+- `render()` redraws the current state only; it does not trigger `onStateChange`.
 - `getState()` returns a serializable snapshot with board, turn, selected square, legal moves, en-passant state, castling rights, and game-over flag.
 - `setState(snapshot)` restores those fields and renders.
 - `botMove(cachedMoves)` makes a Black bot move, optionally using precomputed legal moves.
@@ -155,7 +157,7 @@ This controller API is experimental and may change between app versions.
 
 ### Internal-only APIs
 
-`window.__badChess`, `createDebuggableGameController`, `createDomBoardView`, `playBadNoise`, and the debug/view/audio modules are internal implementation details. They exist for the app and tests, are not compatibility-stable, and should not be used by application code.
+`window.__badChess`, `createDebuggableGameController`, `createDomBoardView`, `playBadNoise`, and the debug/view/audio modules are internal implementation details. `public/game-persistence.js`, `public/game-metrics.js`, and `public/piece-symbols.js` are also internal app support modules even though they export symbols for tests. They exist for the app and tests, are not compatibility-stable, and should not be used by application code.
 
 ## Configuration
 
@@ -166,7 +168,7 @@ Maintainers can tune the badness in `public/app.js` using the named constants ne
 - `GLITCH_MAX_ROTATION_DEG` controls the maximum glitch rotation in degrees.
 - `BOT_PAWN_MOVE_BIAS` controls how often the bot prefers pawn moves when available. Use a probability from `0` to `1`.
 - `BOT_MIN_DELAY_MS` and `BOT_MAX_DELAY_MS` control the bot's thinking delay in milliseconds.
-- `STORAGE_KEY` controls the `localStorage` key used for saved game state.
+- `GAME_STATE_STORAGE_KEY` in `public/game-persistence.js` controls the `localStorage` key used for saved game state.
 
 Example: set `BOT_PAWN_MOVE_BIAS = 0.25` for fewer pawn moves, or `GLITCH_PROBABILITY = 0` to disable layout glitches by default.
 
@@ -177,11 +179,16 @@ Runtime deployment configuration lives in `deploy/chart/values.yaml`, with envir
 | `image.app.repository` | GHCR repository for the `app` service image. |
 | `image.app.tag` | Image tag to deploy; normally injected by `pi_deploy` or set with `--set`. |
 | `image.app.pullPolicy` | Kubernetes image pull policy. |
-| `replicaCount` | Number of app pods. |
+| `replicaCount` | Number of app pods; defaults to `1`. |
+| `nameOverride`, `fullnameOverride` | Optional Helm naming overrides; default to empty strings so the chart computes names. |
+| `serviceAccount.create`, `serviceAccount.annotations`, `serviceAccount.name` | ServiceAccount controls; by default the chart creates one without annotations and computes its name. |
+| `podAnnotations`, `podLabels` | Extra pod metadata; default to empty maps. |
+| `podSecurityContext` | Pod-level security context; defaults to running as non-root UID/GID `101` with `fsGroup: 101`. |
+| `securityContext` | Container security context; defaults to non-root UID/GID `101`, read-only root filesystem, no privilege escalation, and dropped Linux capabilities. |
 | `service.type`, `service.port`, `service.targetPort` | Kubernetes Service exposure and ports; the base chart defaults to `NodePort` for local-cluster access. |
-| `service.nodePort` | Optional fixed NodePort. Leave `null` to let Kubernetes assign one, or set a valid cluster NodePort value, commonly in the `30000-32767` range. |
-| `ingress.*` | Optional ingress host, class, annotations, paths, and TLS secret references. |
-| `resources`, `nodeSelector`, `tolerations`, `affinity` | Standard pod scheduling and resource controls. |
+| `service.nodePort` | Fixed NodePort; defaults to `32080`. Set another valid cluster NodePort, commonly in the `30000-32767` range, or set `null` explicitly to let Kubernetes assign one. |
+| `ingress.*` | Optional ingress host, class, annotations, paths, and TLS secret references; disabled by default. |
+| `resources`, `nodeSelector`, `tolerations`, `affinity` | Standard pod scheduling and resource controls; default to empty values. |
 
 Internally, `createGameController` uses the same bot setting as `config.pawnMoveBias`. The older `config.botPawnMoveBias` spelling remains as a compatibility alias inside the app, but new internal code should use `pawnMoveBias`.
 

@@ -19,8 +19,36 @@ test('Helm chart renders deployment image from values', { skip: !commandExists('
   ], { encoding: 'utf8' });
 
   assert.match(rendered, /kind: Deployment/);
-  assert.match(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:ci-test-tag"/);
-  assert.doesNotMatch(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:latest"/);
+  assert.match(rendered, /^\s*image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:ci-test-tag"$/m);
+  assert.doesNotMatch(rendered, /^\s*image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:latest"$/m);
+  assert.doesNotMatch(rendered, /ghcr\.io\/pi\/really-bad-chess-web-app/);
+});
+
+function renderedServiceNodePort(rendered) {
+  const match = rendered.match(/kind: Service[\s\S]*?\n\s*nodePort: (\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+test('Helm service defaults to ClusterIP, supports configurable NodePort, and rejects invalid values', { skip: !commandExists('helm') }, () => {
+  const renderedDefault = execFileSync('helm', ['template', 'test', 'deploy/chart'], { encoding: 'utf8' });
+  assert.match(renderedDefault, /kind: Service[\s\S]*?spec:\n  type: ClusterIP/);
+  assert.equal(renderedServiceNodePort(renderedDefault), null, 'nodePort is omitted by default');
+
+  const renderedWithNodePort = execFileSync('helm', [
+    'template',
+    'test',
+    'deploy/chart',
+    '--set',
+    'service.type=NodePort',
+    '--set',
+    'service.nodePort=30080'
+  ], { encoding: 'utf8' });
+  assert.match(renderedWithNodePort, /kind: Service[\s\S]*?spec:\n  type: NodePort/);
+  assert.equal(renderedServiceNodePort(renderedWithNodePort), 30080);
+
+  const invalid = spawnSync('helm', ['template', 'test', 'deploy/chart', '--set', 'service.nodePort=8080'], { encoding: 'utf8' });
+  assert.notEqual(invalid.status, 0);
+  assert.match(`${invalid.stderr}\n${invalid.stdout}`, /nodePort|minimum|30000/i);
 });
 
 test('Docker Compose config and image build are valid', { skip: !commandExists('docker') }, () => {
@@ -32,10 +60,10 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
   const tempDir = mkdtempSync(join(tmpdir(), 'bad-chess-compose-'));
   const composeFile = join(tempDir, 'compose.yaml');
   const projectName = `bad-chess-test-${process.pid}-${Date.now()}`;
-  writeFileSync(composeFile, `services:\n  app:\n    build:\n      context: ${JSON.stringify(process.cwd())}\n      dockerfile: Dockerfile\n    image: really-bad-chess-web-app:test\n    ports:\n      - "127.0.0.1:0:80"\n`);
+  writeFileSync(composeFile, `services:\n  app:\n    build:\n      context: ${JSON.stringify(process.cwd())}\n      dockerfile: Dockerfile\n    image: really-bad-chess-web-app:test\n    ports:\n      - "127.0.0.1:0:8080"\n`);
 
   const composeArgs = ['compose', '-p', projectName, '-f', composeFile];
-  const up = spawnSync('docker', [...composeArgs, 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
+  const up = spawnSync('docker', [...composeArgs, 'up', '-d', '--wait', '--build'], { stdio: 'pipe', encoding: 'utf8' });
   if (up.status !== 0) {
     rmSync(tempDir, { recursive: true, force: true });
     t.skip(`docker compose up failed: ${up.stderr || up.stdout}`);
@@ -46,7 +74,7 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  const mapped = execFileSync('docker', [...composeArgs, 'port', 'app', '80'], { encoding: 'utf8' }).trim();
+  const mapped = execFileSync('docker', [...composeArgs, 'port', 'app', '8080'], { encoding: 'utf8' }).trim();
   const port = Number(mapped.split(':').pop());
   assert.ok(port > 0, `expected mapped port from ${mapped}`);
 
@@ -55,7 +83,10 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
   assert.match(index.body, /<script type="module" src="app\.js"><\/script>/);
 
   const modules = [
-    ['/app.js', /import .*\.\/game-controller\.js/],
+    ['/app.js', /import .*\.\/app-bootstrap\.js/],
+    ['/app-bootstrap.js', /export function startApp/],
+    ['/app-state.js', /export function createAppStateManager/],
+    ['/persisted-state-normalizer.js', /export function normalizePersistedState/],
     ['/board-view.js', /export function createDomBoardView/],
     ['/game-controller.js', /export function createGameController/],
     ['/bot.js', /export function makeBadBotMove/],

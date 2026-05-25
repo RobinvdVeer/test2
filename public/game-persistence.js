@@ -13,6 +13,10 @@ export function savePersistedState(state, storage = window.localStorage, key = G
   try { storage?.setItem(key, JSON.stringify(state)); } catch {}
 }
 
+export function savePersistedPayload(serializedState, storage = window.localStorage, key = GAME_STATE_STORAGE_KEY) {
+  try { storage?.setItem(key, serializedState); } catch {}
+}
+
 export function clearPersistedState(storage = window.localStorage, key = GAME_STATE_STORAGE_KEY) {
   try { storage?.removeItem(key); } catch {}
 }

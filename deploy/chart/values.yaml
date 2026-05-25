@@ -22,6 +22,8 @@ podSecurityContext:
   runAsUser: 101
   runAsGroup: 101
   fsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
 
 securityContext:
   allowPrivilegeEscalation: false
@@ -34,7 +36,7 @@ securityContext:
   runAsGroup: 101
 
 service:
-  type: NodePort
+  type: ClusterIP
   port: 80
   targetPort: 8080
   nodePort: null

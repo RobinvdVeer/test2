@@ -331,6 +331,89 @@ test('app tolerates localStorage failures and corrupt persisted data', async () 
   }
 });
 
+test('app rejects invalid parseable persisted game states and starts fresh', async () => {
+  const validGame = {
+    board: createGameState().board.map(row => row.join('')),
+    turn: 'w',
+    selected: null,
+    legalForSelected: [],
+    enPassant: null,
+    castling: { K: true, Q: true, k: true, q: true },
+    gameOver: false
+  };
+  const invalidCases = [
+    ['bad board dimensions', { ...validGame, board: validGame.board.slice(0, 7) }],
+    ['bad board piece', { ...validGame, board: ['X.......', ...validGame.board.slice(1)] }],
+    ['bad turn', { ...validGame, turn: 'x' }],
+    ['missing castling flag', { ...validGame, castling: { K: true, Q: true, k: true } }],
+    ['out-of-range selected square', { ...validGame, selected: { r: 8, c: 0 } }],
+    ['out-of-range en passant square', { ...validGame, enPassant: { r: 2, c: -1 } }],
+    ['malformed legal move', { ...validGame, legalForSelected: [{ from: { r: 6, c: 4 }, to: { r: 9, c: 4 } }] }]
+  ];
+
+  for (const [name, game] of invalidCases) {
+    const storage = createMemoryLocalStorage({ [STORAGE_KEY]: JSON.stringify({ game, app: { playerName: `Bad ${name}`, score: 99, timer: { elapsedMs: 99999, startedAt: null }, settings: { chaos: false } } }) });
+    const app = await loadApp({ localStorage: storage, now: 1000 });
+    try {
+      assert.equal(boardKey(app.api.getState()), boardKey(createGameState()), name);
+      assert.equal(app.api.getState().turn, 'w', name);
+      assert.equal(app.ids.playerName.value || '', '', name);
+      assert.equal(app.ids.score.textContent, '0', name);
+      assert.equal(new RegExp(`Bad ${name}`).test(storage.getItem(STORAGE_KEY) || ''), false, name);
+    } finally {
+      app.restore();
+    }
+  }
+});
+
+test('app normalizes persisted app-state boundaries', async () => {
+  const game = {
+    board: createGameState().board.map(row => row.join('')),
+    turn: 'w',
+    selected: null,
+    legalForSelected: [],
+    enPassant: null,
+    castling: { K: true, Q: true, k: true, q: true },
+    gameOver: false
+  };
+
+  const highStorage = createMemoryLocalStorage({ [STORAGE_KEY]: JSON.stringify({
+    game,
+    app: { playerName: 'A'.repeat(120), score: 5000, timer: { elapsedMs: 9999999999, startedAt: 999999 }, settings: { chaos: false } }
+  }) });
+  const highApp = await loadApp({ localStorage: highStorage, now: 1000 });
+  try {
+    assert.equal(highApp.ids.playerName.value.length, 80);
+    assert.equal(highApp.ids.score.textContent, '999');
+    assert.equal(highApp.ids.timer.textContent, '43200:00');
+    highApp.api.setState({ ...highApp.api.getState(), gameOver: true });
+    highApp.dispatchWindowEvent('beforeunload');
+    const saved = JSON.parse(highStorage.getItem(STORAGE_KEY));
+    assert.equal(saved.app.timer.elapsedMs, 30 * 24 * 60 * 60 * 1000);
+    assert.equal(saved.app.timer.startedAt, null);
+  } finally {
+    highApp.restore();
+  }
+
+  const lowStorage = createMemoryLocalStorage({ [STORAGE_KEY]: JSON.stringify({
+    game,
+    app: { playerName: 'Low', score: -5000, timer: { elapsedMs: -10, startedAt: -1 }, settings: { chaos: true } }
+  }) });
+  const lowApp = await loadApp({ localStorage: lowStorage, now: 1000 });
+  try {
+    assert.equal(lowApp.ids.playerName.value, 'Low');
+    assert.equal(lowApp.ids.score.textContent, '-999');
+    assert.equal(lowApp.ids.timer.textContent, '00:00');
+    lowApp.api.setState({ ...lowApp.api.getState(), gameOver: true });
+    lowApp.dispatchWindowEvent('beforeunload');
+    const saved = JSON.parse(lowStorage.getItem(STORAGE_KEY));
+    assert.equal(saved.app.timer.elapsedMs, 0);
+    assert.equal(saved.app.timer.startedAt, null);
+  } finally {
+    lowApp.restore();
+  }
+});
+
 test('timer persists elapsed time and pauses when game is over', async () => {
   let now = 100000;
   const storage = createMemoryLocalStorage();
@@ -767,23 +850,37 @@ test('Helm chart renders deployment image from values', { skip: !commandExists('
   ], { encoding: 'utf8' });
 
   assert.match(rendered, /kind: Deployment/);
-  assert.match(rendered, /image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:ci-test-tag"/);
-  assert.doesNotMatch(rendered, /image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:latest"/);
+  assert.match(rendered, /^\s*image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:ci-test-tag"$/m);
+  assert.doesNotMatch(rendered, /^\s*image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:latest"$/m);
+  assert.doesNotMatch(rendered, /ghcr\.io\/pi\/really-bad-chess-web-app/);
 });
 
-test('Helm service is externally reachable via configurable NodePort', { skip: !commandExists('helm') }, () => {
+function renderedServiceNodePort(rendered) {
+  const match = rendered.match(/kind: Service[\s\S]*?\n\s*nodePort: (\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+test('Helm service defaults to ClusterIP and supports configurable NodePort', { skip: !commandExists('helm') }, () => {
   const renderedDefault = execFileSync('helm', ['template', 'test', 'deploy/chart'], { encoding: 'utf8' });
-  assert.match(renderedDefault, /kind: Service[\s\S]*?spec:\n  type: NodePort/);
-  assert.doesNotMatch(renderedDefault, /nodePort:/, 'nodePort is omitted by default so Kubernetes can assign one');
+  assert.match(renderedDefault, /kind: Service[\s\S]*?spec:\n  type: ClusterIP/);
+  assert.equal(renderedServiceNodePort(renderedDefault), null, 'nodePort is omitted by default');
+  assert.match(renderedDefault, /seccompProfile:\n          type: RuntimeDefault/);
 
   const renderedWithNodePort = execFileSync('helm', [
     'template',
     'test',
     'deploy/chart',
     '--set',
+    'service.type=NodePort',
+    '--set',
     'service.nodePort=30080'
   ], { encoding: 'utf8' });
-  assert.match(renderedWithNodePort, /kind: Service[\s\S]*?nodePort: 30080/);
+  assert.match(renderedWithNodePort, /kind: Service[\s\S]*?spec:\n  type: NodePort/);
+  assert.equal(renderedServiceNodePort(renderedWithNodePort), 30080);
+
+  const invalid = spawnSync('helm', ['template', 'test', 'deploy/chart', '--set', 'service.nodePort=8080'], { encoding: 'utf8' });
+  assert.notEqual(invalid.status, 0);
+  assert.match(`${invalid.stderr}\n${invalid.stdout}`, /nodePort|minimum|30000/i);
 });
 
 function httpGet(path, port) {
@@ -821,10 +918,10 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
   const tempDir = mkdtempSync(join(tmpdir(), 'bad-chess-compose-'));
   const composeFile = join(tempDir, 'compose.yaml');
   const projectName = `bad-chess-test-${process.pid}-${Date.now()}`;
-  writeFileSync(composeFile, `services:\n  app:\n    build:\n      context: ${JSON.stringify(process.cwd())}\n      dockerfile: Dockerfile\n    image: really-bad-chess-web-app:test\n    ports:\n      - "127.0.0.1:0:80"\n`);
+  writeFileSync(composeFile, `services:\n  app:\n    build:\n      context: ${JSON.stringify(process.cwd())}\n      dockerfile: Dockerfile\n    image: really-bad-chess-web-app:test\n    ports:\n      - "127.0.0.1:0:8080"\n`);
 
   const composeArgs = ['compose', '-p', projectName, '-f', composeFile];
-  const up = spawnSync('docker', [...composeArgs, 'up', '-d', '--wait'], { stdio: 'pipe', encoding: 'utf8' });
+  const up = spawnSync('docker', [...composeArgs, 'up', '-d', '--wait', '--build'], { stdio: 'pipe', encoding: 'utf8' });
   if (up.status !== 0) {
     rmSync(tempDir, { recursive: true, force: true });
     t.skip(`docker compose up failed: ${up.stderr || up.stdout}`);
@@ -835,7 +932,7 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  const mapped = execFileSync('docker', [...composeArgs, 'port', 'app', '80'], { encoding: 'utf8' }).trim();
+  const mapped = execFileSync('docker', [...composeArgs, 'port', 'app', '8080'], { encoding: 'utf8' }).trim();
   const port = Number(mapped.split(':').pop());
   assert.ok(port > 0, `expected mapped port from ${mapped}`);
 
@@ -844,7 +941,10 @@ test('Docker Compose serves the app over HTTP on an ephemeral test port', { skip
   assert.match(index.body, /<script type="module" src="app\.js"><\/script>/);
 
   const modules = [
-    ['/app.js', /import .*\.\/game-controller\.js/],
+    ['/app.js', /import .*\.\/app-bootstrap\.js/],
+    ['/app-bootstrap.js', /export function startApp/],
+    ['/app-state.js', /export function createAppStateManager/],
+    ['/persisted-state-normalizer.js', /export function normalizePersistedState/],
     ['/board-view.js', /export function createDomBoardView/],
     ['/game-controller.js', /export function createGameController/],
     ['/bot.js', /export function makeBadBotMove/],
