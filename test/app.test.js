@@ -774,7 +774,7 @@ test('Helm chart renders deployment image from values', { skip: !commandExists('
 test('Helm service is externally reachable via configurable NodePort', { skip: !commandExists('helm') }, () => {
   const renderedDefault = execFileSync('helm', ['template', 'test', 'deploy/chart'], { encoding: 'utf8' });
   assert.match(renderedDefault, /kind: Service[\s\S]*?spec:\n  type: NodePort/);
-  assert.doesNotMatch(renderedDefault, /nodePort:/, 'nodePort is omitted by default so Kubernetes can assign one');
+  assert.match(renderedDefault, /kind: Service[\s\S]*?nodePort: 32080/);
 
   const renderedWithNodePort = execFileSync('helm', [
     'template',

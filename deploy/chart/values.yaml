@@ -37,7 +37,7 @@ service:
   type: NodePort
   port: 80
   targetPort: 8080
-  nodePort: null
+  nodePort: 32080
 
 ingress:
   enabled: false
