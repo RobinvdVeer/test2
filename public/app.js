@@ -72,7 +72,6 @@ if (restoredState?.game) {
   controller.setState(restoredState.game);
   isRestoring = false;
   renderAppState();
-  persistState();
   if (restoredState.game.turn === 'b' && !restoredState.game.gameOver) {
     controller.botMove?.();
   }
@@ -197,8 +196,10 @@ function normalizeTimer(timer) {
 function resetSavedGame() {
   clearPersistedState();
   appState = defaultAppState({ playerName: playerNameEl?.value || '' });
+  isRestoring = true;
   controller.newGame();
-  persistState();
+  isRestoring = false;
+  renderAppState();
 }
 
 function nextTimer(paused = false) {

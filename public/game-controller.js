@@ -93,9 +93,9 @@ export function createGameControllerSession(options = {}) {
   function setState(next = {}) {
     if (next.board) game.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
     if ('turn' in next) game.turn = next.turn;
-    if ('selected' in next) selected = next.selected;
-    if ('legalForSelected' in next) legalForSelected = Array.isArray(next.legalForSelected) ? next.legalForSelected.slice() : [];
-    if ('enPassant' in next) game.enPassant = next.enPassant;
+    if ('selected' in next) selected = cloneStateValue(next.selected);
+    if ('legalForSelected' in next) legalForSelected = Array.isArray(next.legalForSelected) ? cloneStateValue(next.legalForSelected) : [];
+    if ('enPassant' in next) game.enPassant = cloneStateValue(next.enPassant);
     if ('castling' in next) game.castling = { ...next.castling };
     if ('gameOver' in next) game.gameOver = next.gameOver;
     render();
@@ -106,9 +106,9 @@ export function createGameControllerSession(options = {}) {
     return {
       board: game.board.map(row => row.slice()),
       turn: game.turn,
-      selected,
-      legalForSelected: legalForSelected.slice(),
-      enPassant: game.enPassant,
+      selected: cloneStateValue(selected),
+      legalForSelected: cloneStateValue(legalForSelected),
+      enPassant: cloneStateValue(game.enPassant),
       castling: { ...game.castling },
       gameOver: game.gameOver
     };
@@ -116,6 +116,10 @@ export function createGameControllerSession(options = {}) {
 
   function emitStateChanged() {
     if (typeof options.onStateChange === 'function') options.onStateChange(getState());
+  }
+
+  function cloneStateValue(value) {
+    return value == null ? value : JSON.parse(JSON.stringify(value));
   }
 
   function randomDelay(min, max) {
