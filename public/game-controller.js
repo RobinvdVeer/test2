@@ -6,7 +6,8 @@ export function createGameController(options) {
   return createGameControllerSession(options).controller;
 }
 
-export function createGameControllerSession({ view, random = Math.random, setTimeoutFn = setTimeout, chaosEnabled = () => false, config = {} }) {
+export function createGameControllerSession(options = {}) {
+  const { view, random = Math.random, setTimeoutFn = setTimeout, chaosEnabled = () => false, config = {} } = options;
   const pawnMoveBias = config.pawnMoveBias ?? config.botPawnMoveBias ?? 0.7;
   const botMinDelayMs = config.botMinDelayMs ?? 550;
   const botMaxDelayMs = config.botMaxDelayMs ?? 1250;
@@ -78,10 +79,34 @@ export function createGameControllerSession({ view, random = Math.random, setTim
 
   function render() {
     view.render(game, { selected, legalForSelected, chaosEnabled: chaosEnabled() });
+    if (typeof options.onStateChange === 'function') options.onStateChange(getState());
   }
 
   function setStatus(status) {
     view.setStatus(status);
+  }
+
+  function setState(next = {}) {
+    if (next.board) game.board = next.board.map(row => Array.isArray(row) ? row.slice() : row.split(''));
+    if ('turn' in next) game.turn = next.turn;
+    if ('selected' in next) selected = next.selected;
+    if ('legalForSelected' in next) legalForSelected = Array.isArray(next.legalForSelected) ? next.legalForSelected.slice() : [];
+    if ('enPassant' in next) game.enPassant = next.enPassant;
+    if ('castling' in next) game.castling = { ...next.castling };
+    if ('gameOver' in next) game.gameOver = next.gameOver;
+    render();
+  }
+
+  function getState() {
+    return {
+      board: game.board.map(row => row.slice()),
+      turn: game.turn,
+      selected,
+      legalForSelected: legalForSelected.slice(),
+      enPassant: game.enPassant,
+      castling: { ...game.castling },
+      gameOver: game.gameOver
+    };
   }
 
   function randomDelay(min, max) {
@@ -91,7 +116,10 @@ export function createGameControllerSession({ view, random = Math.random, setTim
   const controller = {
     newGame,
     selectSquare,
-    render
+    render,
+    setState,
+    getState,
+    botMove
   };
 
   const internals = {
