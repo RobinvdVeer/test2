@@ -19,8 +19,24 @@ test('Helm chart renders deployment image from values', { skip: !commandExists('
   ], { encoding: 'utf8' });
 
   assert.match(rendered, /kind: Deployment/);
-  assert.match(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:ci-test-tag"/);
-  assert.doesNotMatch(rendered, /image: "ghcr\.io\/pi\/really-bad-chess-web-app:latest"/);
+  assert.match(rendered, /^\s*image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:ci-test-tag"$/m);
+  assert.doesNotMatch(rendered, /^\s*image: "ghcr\.io\/robinvdveer\/really-bad-chess-web-app:latest"$/m);
+  assert.doesNotMatch(rendered, /ghcr\.io\/pi\/really-bad-chess-web-app/);
+});
+
+function renderedServiceNodePort(rendered) {
+  const match = rendered.match(/kind: Service[\s\S]*?\n\s*nodePort: (\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+test('Helm service NodePort defaults to a valid Kubernetes NodePort and rejects invalid values', { skip: !commandExists('helm') }, () => {
+  const rendered = execFileSync('helm', ['template', 'test', 'deploy/chart'], { encoding: 'utf8' });
+  const nodePort = renderedServiceNodePort(rendered);
+  assert.ok(nodePort >= 30000 && nodePort <= 32767, `expected valid NodePort, got ${nodePort}`);
+
+  const invalid = spawnSync('helm', ['template', 'test', 'deploy/chart', '--set', 'service.nodePort=8080'], { encoding: 'utf8' });
+  assert.notEqual(invalid.status, 0);
+  assert.match(`${invalid.stderr}\n${invalid.stdout}`, /nodePort|minimum|30000/i);
 });
 
 test('Docker Compose config and image build are valid', { skip: !commandExists('docker') }, () => {

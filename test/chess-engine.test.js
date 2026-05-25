@@ -107,6 +107,45 @@ test('castling is unavailable when rights are true but the rook is missing or re
   }
 });
 
+test('black castling execution and castling-right revocation are covered', () => {
+  let state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'b', { K: true, Q: true, k: true, q: true });
+  makeMove(state, legalMovesFor(state, 0, 4).find(m => m.castle === 'k'));
+  assert.equal(state.board[0][6], 'k');
+  assert.equal(state.board[0][5], 'r');
+  assert.equal(state.castling.k, false);
+  assert.equal(state.castling.q, false);
+
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'b', { K: true, Q: true, k: true, q: true });
+  makeMove(state, legalMovesFor(state, 0, 4).find(m => m.castle === 'q'));
+  assert.equal(state.board[0][2], 'k');
+  assert.equal(state.board[0][3], 'r');
+  assert.equal(state.castling.k, false);
+  assert.equal(state.castling.q, false);
+
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'b', { K: true, Q: true, k: true, q: true });
+  makeMove(state, { from: { r: 0, c: 4 }, to: { r: 1, c: 4 } });
+  assert.equal(state.castling.k, false);
+  assert.equal(state.castling.q, false);
+
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'b', { K: true, Q: true, k: true, q: true });
+  makeMove(state, { from: { r: 0, c: 0 }, to: { r: 0, c: 1 } });
+  assert.equal(state.castling.q, false);
+  assert.equal(state.castling.k, true);
+
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'b', { K: true, Q: true, k: true, q: true });
+  makeMove(state, { from: { r: 0, c: 7 }, to: { r: 0, c: 6 } });
+  assert.equal(state.castling.k, false);
+  assert.equal(state.castling.q, true);
+
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'b', { K: true, Q: true, k: true, q: true });
+  makeMove(state, { from: { r: 0, c: 0 }, to: { r: 7, c: 0 } });
+  assert.equal(state.castling.Q, false, 'capturing white queen-side rook revokes white queen-side right');
+
+  state = stateFrom(['r...k..r', '........', '........', '........', '........', '........', '........', 'R...K..R'], 'w', { K: true, Q: true, k: true, q: true });
+  makeMove(state, { from: { r: 7, c: 0 }, to: { r: 0, c: 0 } });
+  assert.equal(state.castling.q, false, 'capturing black queen-side rook revokes black queen-side right');
+});
+
 test('game-end evaluation is pure', () => {
   const state = stateFrom(['k.......', '.Q......', 'K.......', '........', '........', '........', '........', '........'], 'b');
   const result = getGameEnd(state);
