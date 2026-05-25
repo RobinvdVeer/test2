@@ -22,6 +22,7 @@ export function createGameControllerSession(options = {}) {
     legalForSelected = [];
     setStatus('White to move. The bot is already sweating pixels.');
     render();
+    emitStateChanged();
   }
 
   function selectSquare(r, c) {
@@ -49,11 +50,13 @@ export function createGameControllerSession(options = {}) {
       setStatus('That is not your piece. Bad chess, not theft chess.');
     }
     render();
+    emitStateChanged();
   }
 
   function afterPlayerMove() {
     game.turn = 'b';
     render();
+    emitStateChanged();
     const gameEnd = showGameEndIfNeeded();
     if (gameEnd.over) return;
     setStatus('Bot thinking very incorrectly...');
@@ -65,6 +68,7 @@ export function createGameControllerSession(options = {}) {
     if (!makeBadBotMove(game, { pawnMoveBias, random, moves: cachedMoves || undefined })) return showGameEndIfNeeded();
     game.turn = 'w';
     render();
+    emitStateChanged();
     if (!showGameEndIfNeeded().over) setStatus(inCheck(game, 'w') ? 'CHECK! The bot did that by accident.' : 'Your move. The bot regrets nothing.');
   }
 
@@ -74,12 +78,12 @@ export function createGameControllerSession(options = {}) {
     game.gameOver = true;
     const side = result.color === 'w' ? 'White' : 'Black';
     setStatus(result.checkmate ? `${side} is checkmated. Incredible and upsetting.` : 'Stalemate. Nobody wins, especially chess.');
+    emitStateChanged();
     return result;
   }
 
   function render() {
     view.render(game, { selected, legalForSelected, chaosEnabled: chaosEnabled() });
-    if (typeof options.onStateChange === 'function') options.onStateChange(getState());
   }
 
   function setStatus(status) {
@@ -95,6 +99,7 @@ export function createGameControllerSession(options = {}) {
     if ('castling' in next) game.castling = { ...next.castling };
     if ('gameOver' in next) game.gameOver = next.gameOver;
     render();
+    emitStateChanged();
   }
 
   function getState() {
@@ -107,6 +112,10 @@ export function createGameControllerSession(options = {}) {
       castling: { ...game.castling },
       gameOver: game.gameOver
     };
+  }
+
+  function emitStateChanged() {
+    if (typeof options.onStateChange === 'function') options.onStateChange(getState());
   }
 
   function randomDelay(min, max) {
